@@ -106,9 +106,21 @@ body {
 .sent .msg-bub { background: var(--message-out); color: var(--text); border-bottom-right-radius: 4px; }
 .received .msg-bub { background: var(--message-in); backdrop-filter: blur(10px); color: var(--text); border-bottom-left-radius: 4px; }
 .msg-sender { font-size: 12px; font-weight: 600; color: var(--primary); margin-bottom: 1px; cursor: pointer; }
-.msg-img { max-width: 220px; max-height: 220px; border-radius: 10px; cursor: pointer; display: block; margin: 3px 0; }
-.msg-time { font-size: 10px; opacity: 0.7; text-align: right; margin-top: 2px; }
-
+.msg-img {
+    max-width: 220px;
+    max-height: 220px;
+    border-radius: 10px;
+    cursor: pointer;
+    display: block;
+    margin: 0;
+}
+.msg-time {
+    font-size: 10px;
+    opacity: 0.7;
+    flex-shrink: 0;
+    position: relative;
+    top: 2px;
+}
 .input-container { flex-shrink: 0; background: var(--glass); backdrop-filter: blur(22px); border-top: 1px solid var(--glass-border); }
 .input-row { display: flex; align-items: flex-end; gap: 5px; padding: 6px 10px; }
 .msg-input { flex: 1; border: 1px solid var(--glass-border); border-radius: 18px; background: var(--surface); padding: 10px 15px; font-size: 14px; font-family: inherit; outline: none; resize: none; max-height: 100px; color: var(--text); }
@@ -619,19 +631,68 @@ function subscribe(cid) {
 
 // ==================== APPEND MSG ====================
 function appendMsg(m, dt, a, cid) {
-    const me = m.userId === currentUser.uid;
-    const s = allUsers[m.userId] || { displayName: 'Пользователь', avatarUrl: '' };
-    const w = document.createElement('div'); w.className = `msg-wrap ${me ? 'sent' : 'received'}`;
-    const av = document.createElement('div'); av.className = 'msg-av';
-    av.innerHTML = s.avatarUrl ? `<img src="${s.avatarUrl}">` : (s.displayName || 'П')[0].toUpperCase();
-    av.onclick = () => viewUserProfile(m.userId);
-    const b = document.createElement('div'); b.className = 'msg-bub';
-    if (!me) { const sn = document.createElement('div'); sn.className = 'msg-sender'; sn.textContent = s.displayName; sn.onclick = () => viewUserProfile(m.userId); b.appendChild(sn); }
-    if (m.imageUrl) { const img = document.createElement('img'); img.src = m.imageUrl; img.className = 'msg-img'; img.onclick = () => viewFull(m.imageUrl); b.appendChild(img); }
-    if (m.text) { const t = document.createElement('div'); t.textContent = m.text; b.appendChild(t); }
-    const tm = document.createElement('div'); tm.className = 'msg-time';
-    tm.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    b.appendChild(tm); w.appendChild(av); w.appendChild(b); a.appendChild(w);
+    var me = m.userId === currentUser.uid;
+    var w = document.createElement('div');
+    w.className = 'msg-wrap ' + (me ? 'sent' : 'received');
+    
+    var b = document.createElement('div');
+    b.className = 'msg-bub';
+    
+    // Картинка — убираем фон
+    if (m.imageUrl) {
+        b.style.padding = '0';
+        b.style.background = 'none';
+        b.style.border = 'none';
+        b.style.backdropFilter = 'none';
+        var img = document.createElement('img');
+        img.src = m.imageUrl;
+        img.className = 'msg-img';
+        img.onclick = function() { viewFull(m.imageUrl); };
+        b.appendChild(img);
+    }
+    
+    // Текст + время
+    if (m.text) {
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'flex-end';
+        row.style.gap = '4px';
+        var txt = document.createElement('span');
+        txt.textContent = m.text;
+        row.appendChild(txt);
+        var tm = document.createElement('span');
+        tm.className = 'msg-time';
+        tm.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        // Галочки для своих сообщений
+        if (me) {
+            var isRead = m.readBy && m.readBy.length > 0;
+            var check = document.createElement('span');
+            check.style.cssText = 'font-size:10px;margin-left:2px;color:' + (isRead ? 'var(--primary)' : 'var(--text-secondary)');
+            check.textContent = isRead ? '✓✓' : '✓';
+            tm.appendChild(check);
+        }
+        row.appendChild(tm);
+        b.appendChild(row);
+    } else {
+        var tmRow = document.createElement('div');
+        tmRow.style.textAlign = 'right';
+        var tm = document.createElement('span');
+        tm.className = 'msg-time';
+        tm.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        // Галочки для своих фото
+        if (me) {
+            var isRead = m.readBy && m.readBy.length > 0;
+            var check = document.createElement('span');
+            check.style.cssText = 'font-size:10px;margin-left:2px;color:' + (isRead ? 'var(--primary)' : 'var(--text-secondary)');
+            check.textContent = isRead ? '✓✓' : '✓';
+            tm.appendChild(check);
+        }
+        tmRow.appendChild(tm);
+        b.appendChild(tmRow);
+    }
+    
+    w.appendChild(b);
+    a.appendChild(w);
 }
 
 // ==================== SEND ====================
@@ -650,7 +711,28 @@ async function sendMsg() {
         if (inp) { inp.value = ''; inp.style.height = 'auto'; inp.focus(); }
     } catch (e) { console.error(e); }
     finally { const sb = $('#sendBtn'); if (sb) sb.disabled = false; }
-}
+// Отправить уведомление собеседнику
+var receiver = allUsers[currentChat];
+if (receiver && receiver.fcmToken) {
+    var notificationBody = txt || '📷 Фото';
+    fetch('https://fcm.googleapis.com/fcm/send', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'key=AIzaSyDjuPQ1WX69DvTJJN74CC6L1HAcw5ill2I'
+        },
+        body: JSON.stringify({
+            to: receiver.fcmToken,
+            notification: {
+                title: currentProfile.displayName,
+                body: notificationBody,
+                icon: '/icon.png'
+            }
+        })
+    }).catch(function(e) {
+        console.log('Notification error:', e);
+    });
+}}
 
 function compressFile(file) {
     return new Promise(r => {
@@ -828,6 +910,35 @@ auth.onAuthStateChanged(async (user) => {
         showAuthScreen();
     }
 });
+const messaging = firebase.messaging();
+
+async function requestNotificationPermission() {
+    try {
+        const token = await messaging.getToken({
+            vapidKey: 'BI-4PaT9XQVG0CXAoNatPPWTdw_jNUVpSajOixlM9bmEQugbMB6-lIDBypIU_kXbUpBGTrE6Zs91P88R51FXoSU'
+        });
+        if (token) {
+            await db.collection('users').doc(currentUser.uid).update({
+                fcmToken: token
+            });
+            console.log('Уведомления включены');
+        }
+    } catch (e) {
+        console.log('Нет разрешения на уведомления:', e);
+    }
+}
+
+// Запросить разрешение при входе
+// В функции buildMainUI, после настройки слушателей, добавь:
+setTimeout(function() {
+    Notification.requestPermission().then(function(permission) {
+        if (permission === 'granted') {
+            messagin.getToken({ vapidKey: 'BI-4PaT9XQVG0CXAoNatPPWTdw_jNUVpSajOixlM9bmEQugbMB6-lIDBypIU_kXbUpBGTrE6Zs91P88R51FXoSU' }).then(function(token) {
+                db.collection('users').doc(currentUser.uid).update({ fcmToken: token });
+            });
+        }
+    });
+}, 1000);
 </script>
 </body>
 </html>
