@@ -431,7 +431,13 @@ async function loadProfile(){const d=await db.collection('users').doc(currentUse
 function buildMainUI(){$('#bottomNav').classList.remove('hidden');$('#mainContent').innerHTML=`<div class="screen active" id="screenChats"><div class="header"><span style="font-weight:700;font-size:19px;color:var(--text);">Quark</span></div><div class="chat-scroll"><div class="search-box"><div class="search-wrapper"><i class="fas fa-search"></i><input type="text" class="search-input" id="searchInput" placeholder="Поиск..."></div></div><div id="chatList"></div></div></div><div class="screen" id="screenMessages"><div class="header"><button class="icon-button" id="backBtn"><i class="fas fa-arrow-left"></i></button><div class="avatar" id="msgAv" style="width:34px;height:34px;font-size:12px;"></div><div style="flex:1;min-width:0;" id="msgInfo"><div style="font-weight:600;font-size:15px;color:var(--text);" id="msgName"></div><div style="font-size:11px;color:var(--text-secondary);" id="msgTyping"></div></div><button class="icon-button" id="msgMenuBtn" style="display:none;"><i class="fas fa-ellipsis-v"></i></button><button class="icon-button" id="cancelSelectBtn" style="display:none;"><i class="fas fa-times"></i></button><button class="icon-button" id="deleteSelectedBtn" style="display:none;color:var(--danger);"><i class="fas fa-trash"></i></button></div><div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div><div class="input-container"><div class="reply-bar hidden" id="replyBar"><div class="reply-preview" id="replyPreview"></div><span class="reply-close" id="replyClose">✕</span></div><div class="input-row"><button class="icon-button" id="attachBtn"><i class="fas fa-paperclip"></i></button><textarea class="msg-input" id="msgInput" placeholder="Сообщение..." rows="1"></textarea><button class="send-btn" id="sendBtn"><i class="fas fa-paper-plane"></i></button></div></div></div><div class="screen" id="screenProfile"><div class="header"><span style="font-weight:700;font-size:18px;color:var(--text);"><i class="fas fa-user-circle"></i> Профиль</span></div><div class="profile-scroll"><div class="profile-card"><div class="profile-avatar-wrap"><div class="avatar" id="profAv"></div><div class="profile-avatar-edit" id="avEditBtn"><i class="fas fa-camera"></i></div></div><div class="profile-name" id="profName"></div><div class="profile-username" id="profUser"></div><div class="profile-bio" id="profBio"></div><div class="form-group"><label>Имя</label><input type="text" class="form-input" id="dnInput"></div><div class="form-group"><label>Username</label><input type="text" class="form-input" id="unInput"></div><div class="form-group"><label>О себе</label><textarea class="form-input" id="bioInput" rows="2"></textarea></div><button class="btn btn-primary" id="saveProfBtn">Сохранить</button><button class="btn btn-danger" id="logoutBtn"><i class="fas fa-sign-out-alt"></i> Выйти</button></div></div></div><div class="screen" id="screenSettings"><div class="header"><span style="font-weight:700;font-size:18px;color:var(--text);"><i class="fas fa-cog"></i> Настройки</span></div><div class="settings-scroll"><div class="settings-group"><div class="settings-row" id="darkRow"><div class="settings-left"><div class="settings-icon" style="background:var(--surface);color:var(--text);"><i class="fas fa-moon"></i></div><span class="settings-text">Тёмная тема</span></div><div class="toggle" id="darkToggle"></div></div></div><div class="settings-group"><div class="settings-row" id="fontRow"><div class="settings-left"><div class="settings-icon" style="background:rgba(59,130,246,0.15);color:#3B82F6;"><i class="fas fa-font"></i></div><span class="settings-text">Размер шрифта</span></div><span class="settings-value" id="fontValue">Средний</span></div></div><div class="settings-group"><div class="settings-row" id="soundRow"><div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-volume-up"></i></div><span class="settings-text">Звук</span></div><div class="toggle" id="soundToggle"></div></div></div><div class="settings-group"><div class="settings-row" id="settLogout"><div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.15);color:var(--danger);"><i class="fas fa-sign-out-alt"></i></div><span class="settings-text" style="color:var(--danger);">Выйти</span></div></div></div></div></div>`;$('#bottomNav').innerHTML=`<button class="nav-item active" data-sc="screenChats"><i class="fas fa-comments"></i><span>Чаты</span></button><button class="nav-item" data-sc="screenProfile"><i class="fas fa-user"></i><span>Профиль</span></button><button class="nav-item" data-sc="screenSettings"><i class="fas fa-cog"></i><span>Настройки</span></button>`;const menu=document.createElement('div');menu.className='attach-menu';menu.id='attachMenu';menu.innerHTML='<button class="attach-menu-item" data-accept="image/*"><i class="fas fa-image" style="color:#10B981;"></i> Фото</button>';document.body.appendChild(menu);const modal=document.createElement('div');modal.className='modal-overlay hidden';modal.id='userModal';modal.innerHTML='<div class="modal"><div class="avatar" id="umAv"></div><h3 id="umName"></h3><div class="modal-username" id="umUser"></div><div class="modal-bio" id="umBio"></div><button class="btn btn-primary" id="umMsgBtn"><i class="fas fa-comment"></i> Написать</button><button class="btn btn-danger" id="umCloseBtn">Закрыть</button></div>';document.body.appendChild(modal);updateProfileUI();applyFontSize();applyTheme();const dt=$('#darkToggle');if(dt)dt.classList.toggle('active',darkMode);const st=$('#soundToggle');if(st)st.classList.toggle('active',true);const fv=$('#fontValue');if(fv)fv.textContent={small:'Мелкий',medium:'Средний',large:'Крупный'}[fontSize]||'Средний';setupListeners()}
 
 // ==================== INIT CHATS ====================
-async function initChats(){await loadAllUsers();await loadActiveChats();renderChatList();listenForMessages()}
+async function initChats() {
+    await loadAllUsers();
+    await loadActiveChats();
+    renderChatList();
+    listenForMessages();
+    setTimeout(initPush, 2000);
+}
 async function loadAllUsers(){const s=await db.collection('users').get();allUsers={};s.forEach(d=>allUsers[d.id]={id:d.id,...d.data()})}
 async function loadActiveChats(){activeChats=new Set();const s=await db.collection('messages').where('userId','==',currentUser.uid).get();s.forEach(d=>{const m=d.data();if(m.chatId&&m.chatId!=='general'){const p=m.chatId.split('_');const o=p.find(x=>x!==currentUser.uid);if(o&&allUsers[o])activeChats.add(o)}});for(const uid of activeChats)await loadChatPreview(uid)}
 async function loadChatPreview(uid){const cid=[currentUser.uid,uid].sort().join('_');if(messageCache[cid])return;try{const s=await db.collection('messages').where('chatId','==',cid).orderBy('timestamp','asc').limit(50).get();const ms=[];s.forEach(d=>ms.push({id:d.id,...d.data()}));messageCache[cid]=ms;if(ms.length>0){const l=ms[ms.length-1];lastMessagePreviews[uid]=l.imageUrl?'<i class="fas fa-image"></i> Фото':(l.text||'').substring(0,30);const ts=l.timestamp?.toDate();if(ts)lastMessageTimes[uid]=ts.getTime()}}catch(e){}}
@@ -498,20 +504,20 @@ function listenForMessages() {
                     
                     // Push-уведомление
                     var receiver = allUsers[other];
-                    var sender = allUsers[m.userId];
                     if (receiver && receiver.fcmToken) {
-                        fetch('https://fcm.googleapis.com/fcm/send', {
+                        fetch('https://fcm.googleapis.com/v1/projects/massanger-2413e/messages:send', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
-                                'Authorization': 'key=AIzaSyDjuPQ1WX69DvTJJN74CC6L1HAcw5ill2I'
+                                'Authorization': 'Bearer ' + currentUser.accessToken
                             },
                             body: JSON.stringify({
-                                to: receiver.fcmToken,
-                                notification: {
-                                    title: sender ? sender.displayName : 'Quark',
-                                    body: m.text || '📷 Фото',
-                                    icon: 'https://cdn-icons-png.flaticon.com/128/5968/5968866.png'
+                                message: {
+                                    token: receiver.fcmToken,
+                                    notification: {
+                                        title: (allUsers[m.userId] || {}).displayName || 'Quark',
+                                        body: m.text || '📷 Фото'
+                                    }
                                 }
                             })
                         }).catch(function(e) {});
@@ -567,6 +573,26 @@ async function initPushNotifications() {
 
 // Вызови в initChats или после входа
 setTimeout(initPushNotifications, 2000);
+
+function initPush() {
+    if ('Notification' in window) {
+        Notification.requestPermission().then(function(permission) {
+            if (permission === 'granted') {
+                navigator.serviceWorker.register('/firebase-messaging-sw.js').then(function(registration) {
+                    const messaging = firebase.messaging();
+                    messaging.getToken({
+                        vapidKey: 'BI-4PaT9XQVG0CXAoNatPPWTdw_jNUVpSajOixlM9bmEQugbMB6-lIDBypIU_kXbUpBGTrE6Zs91P88R51FXoSU',
+                        serviceWorkerRegistration: registration
+                    }).then(function(token) {
+                        if (token) {
+                            db.collection('users').doc(currentUser.uid).update({ fcmToken: token });
+                        }
+                    }).catch(function(e) {});
+                });
+            }
+        });
+    }
+}
 </script>
 </body>
 </html>
