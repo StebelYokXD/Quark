@@ -1,1 +1,1 @@
-Это мессенджер, полностью разработанный нейросетью ради прикола. Работает на FireBase
+This is a messenger developed entirely by AI for fun. It runs on FireBase.
