@@ -85,6 +85,12 @@ function isUserOnline(user) {
     return (Date.now() - toMillis(user.lastSeen)) < ONLINE_THRESHOLD_MS;
 }
 
+// Whether a user has opted to let others see their online/last-seen status
+// (their own "Показывать время захода" setting — defaults to true).
+function canShowLastSeen(user) {
+    return !!user && user.lastSeenEnabled !== false;
+}
+
 // A "chat-like" object (group/channel/general) as opposed to a DM with a plain user.
 function isGroupLike(id) {
     return id === GENERAL_CHAT_ID || !!allChats[id];
@@ -443,46 +449,61 @@ function buildMainUI() {
         <div class="screen" id="screenSettings">
             <div class="header"><span style="font-weight:700;font-size:18px;color:var(--text);"><i class="fas fa-cog"></i> Настройки</span></div>
             <div class="settings-scroll">
+                <div class="section-label first" style="margin-left:4px;">Внешний вид</div>
                 <div class="settings-group">
                     <div class="settings-row" id="darkRow">
                         <div class="settings-left"><div class="settings-icon" style="background:var(--surface);color:var(--text);"><i class="fas fa-moon"></i></div><span class="settings-text">Тёмная тема</span></div>
                         <div class="toggle" id="darkToggle"></div>
                     </div>
-                </div>
-                <div class="settings-group">
                     <div class="settings-row" id="fontRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(59,130,246,0.15);color:#3B82F6;"><i class="fas fa-font"></i></div><span class="settings-text">Размер шрифта</span></div>
                         <span class="settings-value" id="fontValue">Средний</span>
                     </div>
                 </div>
+
+                <div class="section-label" style="margin-left:4px;">Уведомления</div>
                 <div class="settings-group">
                     <div class="settings-row" id="soundRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-volume-up"></i></div><span class="settings-text">Звук уведомлений</span></div>
                         <div class="toggle" id="soundToggle"></div>
                     </div>
                 </div>
+
+                <div class="section-label" style="margin-left:4px;">Приватность</div>
                 <div class="settings-group">
                     <div class="settings-row" id="readReceiptsRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-check-double"></i></div><span class="settings-text">Отметки о прочтении</span></div>
                         <div class="toggle" id="readReceiptsToggle"></div>
                     </div>
+                    <div class="settings-row" id="lastSeenRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-clock"></i></div><span class="settings-text">Показывать время захода</span></div>
+                        <div class="toggle" id="lastSeenToggle"></div>
+                    </div>
+                    <div class="settings-row" id="typingRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-keyboard"></i></div><span class="settings-text">Статус «печатает...»</span></div>
+                        <div class="toggle" id="typingToggle"></div>
+                    </div>
+                    <div class="settings-row" id="privateProfileRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.15);color:var(--danger);"><i class="fas fa-user-shield"></i></div><span class="settings-text">Скрыть профиль из поиска</span></div>
+                        <div class="toggle" id="privateProfileToggle"></div>
+                    </div>
                 </div>
+
+                <div class="section-label" style="margin-left:4px;">Данные</div>
                 <div class="settings-group">
                     <div class="settings-row" id="clearCacheRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(59,130,246,0.15);color:#3B82F6;"><i class="fas fa-broom"></i></div><span class="settings-text">Очистить кэш</span></div>
                     </div>
                 </div>
+
+                <div class="section-label" style="margin-left:4px;">Аккаунт</div>
                 <div class="settings-group">
                     <div class="settings-row" id="switchAccountRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(124,77,255,0.15);color:var(--primary);"><i class="fas fa-exchange-alt"></i></div><span class="settings-text">Сменить аккаунт</span></div>
                     </div>
-                </div>
-                <div class="settings-group">
                     <div class="settings-row" id="aboutRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(128,128,128,0.15);color:var(--text-secondary);"><i class="fas fa-info-circle"></i></div><span class="settings-text">О приложении</span></div>
                     </div>
-                </div>
-                <div class="settings-group">
                     <div class="settings-row" id="settLogout">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.15);color:var(--danger);"><i class="fas fa-sign-out-alt"></i></div><span class="settings-text" style="color:var(--danger);">Выйти</span></div>
                     </div>
@@ -505,7 +526,7 @@ function buildMainUI() {
         </div>`;
 
     $('#bottomNav').innerHTML = `
-        <button class="nav-item active" data-sc="screenChats"><i class="fas fa-comments"></i><span>Чаты</span></button>
+        <button class="nav-item active" data-sc="screenChats"><span class="nav-icon-wrap"><i class="fas fa-comments"></i><span class="nav-badge hidden" id="navChatsBadge"></span></span><span>Чаты</span></button>
         <button class="nav-item" data-sc="screenProfile"><i class="fas fa-user"></i><span>Профиль</span></button>
         <button class="nav-item" data-sc="screenSettings"><i class="fas fa-cog"></i><span>Настройки</span></button>`;
 
@@ -522,6 +543,9 @@ function buildMainUI() {
     const dt = $('#darkToggle'); if (dt) dt.classList.toggle('active', darkMode);
     const st = $('#soundToggle'); if (st) st.classList.toggle('active', soundEnabled);
     const rt = $('#readReceiptsToggle'); if (rt) rt.classList.toggle('active', readReceiptsEnabled);
+    const lt = $('#lastSeenToggle'); if (lt) lt.classList.toggle('active', (currentProfile && currentProfile.lastSeenEnabled) !== false);
+    const tt = $('#typingToggle'); if (tt) tt.classList.toggle('active', (currentProfile && currentProfile.typingIndicatorEnabled) !== false);
+    const pt = $('#privateProfileToggle'); if (pt) pt.classList.toggle('active', !!(currentProfile && currentProfile.privateProfile));
     const fv = $('#fontValue'); if (fv) fv.textContent = { small: 'Мелкий', medium: 'Средний', large: 'Крупный' }[fontSize] || 'Средний';
 
     setupListeners();
@@ -814,6 +838,22 @@ function renderChatList() {
         div.onclick = () => { unreadCounts[id] = 0; openChat(id); };
         list.appendChild(div);
     }
+    updateNavBadge();
+}
+
+// Total-unread badge on the "Чаты" tab of the bottom nav — sums the
+// per-chat counters so there's a single glance-able indicator, like the
+// app-icon/tab badges in Telegram or WhatsApp.
+function updateNavBadge() {
+    const badge = $('#navChatsBadge');
+    if (!badge) return;
+    const total = Object.values(unreadCounts).reduce((sum, n) => sum + (n || 0), 0);
+    if (total > 0) {
+        badge.textContent = total > 99 ? '99+' : String(total);
+        badge.classList.remove('hidden');
+    } else {
+        badge.classList.add('hidden');
+    }
 }
 
 // ==================== OPEN CHAT ====================
@@ -905,7 +945,7 @@ function renderFromCache(cid) {
     }
     let lastDate = null;
     const groupChat = isGroupLike(currentChat) && currentChat !== GENERAL_CHAT_ID ? (allChats[currentChat] && allChats[currentChat].type === 'group') : (currentChat === GENERAL_CHAT_ID);
-    msgs.forEach(msg => {
+    msgs.forEach((msg, idx) => {
         const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
         const ds = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
         if (ds !== lastDate) {
@@ -915,7 +955,9 @@ function renderFromCache(cid) {
             area.appendChild(dv);
             lastDate = ds;
         }
-        appendMsg(msg, dt, area, cid, groupChat);
+        const nextMsg = msgs[idx + 1];
+        const showAvatar = !nextMsg || nextMsg.userId !== msg.userId;
+        appendMsg(msg, dt, area, cid, groupChat, showAvatar);
     });
     area.scrollTop = 999999;
 }
@@ -950,7 +992,7 @@ function renderMessagesSnapshot(snap, cid) {
 
     const groupChat = currentChat === GENERAL_CHAT_ID || (allChats[currentChat] && allChats[currentChat].type === 'group');
     let lastDate = null;
-    msgs.forEach(msg => {
+    msgs.forEach((msg, idx) => {
         const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
         const ds = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
         if (ds !== lastDate) {
@@ -960,7 +1002,9 @@ function renderMessagesSnapshot(snap, cid) {
             area.appendChild(dv);
             lastDate = ds;
         }
-        appendMsg(msg, dt, area, cid, groupChat);
+        const nextMsg = msgs[idx + 1];
+        const showAvatar = !nextMsg || nextMsg.userId !== msg.userId;
+        appendMsg(msg, dt, area, cid, groupChat, showAvatar);
     });
     area.scrollTop = 999999;
 
@@ -1054,7 +1098,7 @@ function handleIncomingChanges(changes) {
 }
 
 // ==================== APPEND MSG ====================
-function appendMsg(m, dt, area, cid, groupChat) {
+function appendMsg(m, dt, area, cid, groupChat, showAvatar) {
     const isMine = m.userId === currentUser.uid;
     const wrapper = document.createElement('div');
     wrapper.className = 'msg-wrap ' + (isMine ? 'sent' : 'received');
@@ -1078,6 +1122,27 @@ function appendMsg(m, dt, area, cid, groupChat) {
         e.stopPropagation();
         showMessageMenu(m, wrapper, cid, isMine);
     });
+
+    // In group chats, show the sender's avatar next to received messages
+    // (like Telegram). Consecutive messages from the same sender only show
+    // the avatar on the last one, but a same-size invisible slot is kept
+    // for the earlier ones so every bubble still lines up.
+    if (groupChat && !isMine) {
+        const sender = allUsers[m.userId];
+        const avatarEl = document.createElement('div');
+        avatarEl.className = 'msg-avatar' + (showAvatar ? '' : ' msg-avatar-hidden');
+        if (showAvatar) {
+            avatarEl.innerHTML = sender && sender.avatarUrl
+                ? '<img src="' + sender.avatarUrl + '">'
+                : initials(sender ? sender.displayName : '');
+            avatarEl.style.cursor = 'pointer';
+            avatarEl.onclick = function (e) {
+                e.stopPropagation();
+                viewUserProfile(m.userId);
+            };
+        }
+        wrapper.appendChild(avatarEl);
+    }
 
     const bubble = document.createElement('div');
     bubble.className = 'msg-bub';
@@ -1504,7 +1569,10 @@ function updateStatusDisplay() {
     const user = allUsers[currentChat];
     if (!user) return;
 
-    if (isUserOnline(user)) {
+    if (!canShowLastSeen(user)) {
+        mt.textContent = '';
+        mt.style.color = 'var(--text-secondary)';
+    } else if (isUserOnline(user)) {
         mt.textContent = 'В сети';
         mt.style.color = '#10B981';
     } else if (user.lastSeen) {
@@ -1547,6 +1615,7 @@ function watchChatMeta(id) {
 // ==================== TYPING (DMs only) ====================
 function setTyping() {
     if (!currentUser || !currentChat || !currentProfile || isGroupLike(currentChat)) return;
+    if (currentProfile.typingIndicatorEnabled === false) return;
     const cid = chatIdFor(currentChat);
 
     db.collection('typing').doc(cid).set({
@@ -1669,6 +1738,7 @@ function viewUserProfile(uid, returnScreen) {
     if (!body) return;
 
     function statusText() {
+        if (!canShowLastSeen(user)) return '';
         if (isUserOnline(user)) return 'в сети';
         if (user.lastSeen) return 'был(а) ' + formatTime(toMillis(user.lastSeen)).toLowerCase();
         return '';
@@ -1892,6 +1962,11 @@ function showChatInfo(id) {
         const members = meta.members || [];
         const memberLabel = isChannel ? 'подписчиков' : 'участников';
         const canAdd = !isChannel || isAdmin;
+        // Non-admins can see how many subscribers a channel has, but not
+        // the actual list — mirrors Telegram, where a channel's subscriber
+        // list is admin-only while a group's member list stays visible to
+        // everyone.
+        const canSeeMemberList = !isChannel || isAdmin;
 
         body.innerHTML =
             '<div class="tg-cover' + (meta.coverUrl ? ' has-photo' : '') + '"' + (meta.coverUrl ? ' style="background-image:url(\'' + meta.coverUrl + '\')"' : '') + '>' +
@@ -1913,27 +1988,78 @@ function showChatInfo(id) {
                 '<button class="btn btn-primary" id="ciSave" style="margin-bottom:14px;">Сохранить</button>' +
                 '</div>'
             ) : '') +
-            '<div class="section-label" style="margin-left:16px;">' + memberLabel.charAt(0).toUpperCase() + memberLabel.slice(1) + '</div>' +
-            '<div class="tg-info-list" id="ciMemberList"></div>' +
+            (canSeeMemberList ? (
+                '<div class="section-label" style="margin-left:16px;">' + memberLabel.charAt(0).toUpperCase() + memberLabel.slice(1) + '</div>' +
+                '<div class="tg-info-list" id="ciMemberList"></div>'
+            ) : '') +
             '<div class="tg-danger-list">' +
             '<div class="tg-danger-row" id="ciLeave"><i class="fas fa-sign-out-alt"></i> Покинуть чат</div>' +
             (isAdmin ? '<div class="tg-danger-row" id="ciDelete"><i class="fas fa-trash"></i> Удалить чат</div>' : '') +
             '</div>';
 
         const listEl = body.querySelector('#ciMemberList');
-        members.forEach(uid => {
-            const u = allUsers[uid];
-            if (!u) return;
-            const row = document.createElement('div');
-            row.className = 'member-row';
-            row.innerHTML =
-                '<div class="avatar">' + (u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u.displayName)) + '</div>' +
-                '<div class="member-row-info"><div class="member-row-name">' + (u.displayName || 'Пользователь') +
-                ((meta.admins || []).includes(uid) ? '<span class="role-tag">admin</span>' : '') + '</div>' +
-                '<div class="member-row-sub">' + (u.username ? '@' + u.username : '') + '</div></div>';
-            row.onclick = () => viewUserProfile(uid, 'screenChatInfo');
-            listEl.appendChild(row);
-        });
+        if (listEl) {
+            members.forEach(uid => {
+                const u = allUsers[uid];
+                if (!u) return;
+                const isTargetAdmin = (meta.admins || []).includes(uid);
+                const row = document.createElement('div');
+                row.className = 'member-row';
+                row.innerHTML =
+                    '<div class="avatar">' + (u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u.displayName)) + '</div>' +
+                    '<div class="member-row-info"><div class="member-row-name">' + (u.displayName || 'Пользователь') +
+                    (isTargetAdmin ? '<span class="role-tag">admin</span>' : '') + '</div>' +
+                    '<div class="member-row-sub">' + (u.username ? '@' + u.username : '') + '</div></div>';
+                row.onclick = () => viewUserProfile(uid, 'screenChatInfo');
+
+                // Admins can promote/demote other members and remove them
+                // from the group or channel — not available for yourself.
+                if (isAdmin && uid !== currentUser.uid) {
+                    const menuBtn = document.createElement('div');
+                    menuBtn.className = 'member-row-menu';
+                    menuBtn.innerHTML = '<i class="fas fa-ellipsis-v"></i>';
+                    menuBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        showActionSheet([
+                            {
+                                label: isTargetAdmin ? 'Снять администратора' : 'Сделать администратором',
+                                icon: 'fa-user-shield',
+                                onClick: async () => {
+                                    await db.collection('chats').doc(id).update({
+                                        admins: isTargetAdmin
+                                            ? firebase.firestore.FieldValue.arrayRemove(uid)
+                                            : firebase.firestore.FieldValue.arrayUnion(uid)
+                                    });
+                                    meta.admins = isTargetAdmin
+                                        ? (meta.admins || []).filter(a => a !== uid)
+                                        : [...(meta.admins || []), uid];
+                                    render();
+                                }
+                            },
+                            {
+                                label: 'Удалить из чата',
+                                icon: 'fa-user-slash',
+                                danger: true,
+                                onClick: () => {
+                                    showCustomConfirm('Удалить этого участника из чата?', async () => {
+                                        await db.collection('chats').doc(id).update({
+                                            members: firebase.firestore.FieldValue.arrayRemove(uid),
+                                            admins: firebase.firestore.FieldValue.arrayRemove(uid)
+                                        });
+                                        meta.members = (meta.members || []).filter(x => x !== uid);
+                                        meta.admins = (meta.admins || []).filter(x => x !== uid);
+                                        render();
+                                    });
+                                }
+                            }
+                        ]);
+                    };
+                    row.appendChild(menuBtn);
+                }
+
+                listEl.appendChild(row);
+            });
+        }
 
         if (isAdmin) {
             body.querySelector('#ciSave').onclick = async () => {
@@ -2193,6 +2319,39 @@ function setupListeners() {
         if (rt) rt.classList.toggle('active', readReceiptsEnabled);
     };
 
+    // These three affect what OTHER people see about you, so — unlike the
+    // device-only toggles above — they're saved to your profile document
+    // rather than localStorage.
+    function toggleLastSeen() {
+        const enabled = !((currentProfile && currentProfile.lastSeenEnabled) !== false);
+        currentProfile.lastSeenEnabled = enabled;
+        db.collection('users').doc(currentUser.uid).update({ lastSeenEnabled: enabled }).catch(() => {});
+        const lt = $('#lastSeenToggle');
+        if (lt) lt.classList.toggle('active', enabled);
+    }
+    $('#lastSeenRow').onclick = toggleLastSeen;
+    $('#lastSeenToggle').onclick = e => { e.stopPropagation(); toggleLastSeen(); };
+
+    function toggleTypingIndicator() {
+        const enabled = !((currentProfile && currentProfile.typingIndicatorEnabled) !== false);
+        currentProfile.typingIndicatorEnabled = enabled;
+        db.collection('users').doc(currentUser.uid).update({ typingIndicatorEnabled: enabled }).catch(() => {});
+        const tt = $('#typingToggle');
+        if (tt) tt.classList.toggle('active', enabled);
+    }
+    $('#typingRow').onclick = toggleTypingIndicator;
+    $('#typingToggle').onclick = e => { e.stopPropagation(); toggleTypingIndicator(); };
+
+    function togglePrivateProfile() {
+        const enabled = !(currentProfile && currentProfile.privateProfile);
+        currentProfile.privateProfile = enabled;
+        db.collection('users').doc(currentUser.uid).update({ privateProfile: enabled }).catch(() => {});
+        const pt = $('#privateProfileToggle');
+        if (pt) pt.classList.toggle('active', enabled);
+    }
+    $('#privateProfileRow').onclick = togglePrivateProfile;
+    $('#privateProfileToggle').onclick = e => { e.stopPropagation(); togglePrivateProfile(); };
+
     $('#clearCacheRow').onclick = () => {
         showCustomConfirm('Очистить локальный кэш сообщений? Приложение перезагрузится.', () => {
             messageCache = {};
@@ -2243,6 +2402,10 @@ async function renderSearchResults(q, rawQuery) {
 
     Object.values(allUsers).forEach(user => {
         if (user.id === currentUser.uid) return;
+        // A private profile stays out of search for people who haven't
+        // talked to them yet — existing contacts can still find them,
+        // same as Telegram's "who can find me" privacy behaves.
+        if (user.privateProfile && !activeChats.has(user.id)) return;
         const name = (user.displayName || '').toLowerCase();
         const uname = (user.username || '').toLowerCase();
         if (!name.includes(q) && !uname.includes(q)) return;

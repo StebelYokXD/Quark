@@ -78,6 +78,18 @@ body {
     z-index: 1;
 }
 
+@media (max-width: 768px) {
+    /* On mobile, JS shrinks .app's height to match the visual viewport
+       when the on-screen keyboard opens (see setupViewportFix). body's
+       centering would then center that now-shorter box vertically,
+       leaving a gray gap of empty body background between the input
+       and the keyboard. Anchoring .app to the top removes that gap. */
+    body {
+        align-items: flex-start;
+        justify-content: flex-start;
+    }
+}
+
 @media (min-width: 769px) {
     .app {
         border-radius: 24px;
@@ -234,6 +246,30 @@ body {
 .nav-item.active::before {
     opacity: 1;
     transform: translateX(-50%) scale(1);
+}
+
+.nav-icon-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.nav-badge {
+    position: absolute;
+    top: calc(-6px * var(--ui-scale, 1));
+    right: calc(-10px * var(--ui-scale, 1));
+    min-width: calc(16px * var(--ui-scale, 1));
+    height: calc(16px * var(--ui-scale, 1));
+    padding: 0 calc(4px * var(--ui-scale, 1));
+    border-radius: calc(8px * var(--ui-scale, 1));
+    background: var(--danger);
+    color: white;
+    font-size: calc(10px * var(--ui-scale, 1));
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    box-shadow: 0 0 0 2px var(--bg);
 }
 
 /* Auth */
@@ -487,6 +523,31 @@ body {
     backdrop-filter: blur(10px);
     color: var(--text);
     border-bottom-left-radius: calc(6px * var(--ui-scale, 1));
+}
+
+.msg-avatar {
+    width: calc(28px * var(--ui-scale, 1));
+    height: calc(28px * var(--ui-scale, 1));
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    color: white;
+    font-size: calc(12px * var(--ui-scale, 1));
+    background: linear-gradient(135deg, var(--primary), #A78BFA);
+    overflow: hidden;
+}
+
+.msg-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.msg-avatar-hidden {
+    visibility: hidden;
 }
 
 .msg-img {
@@ -1324,6 +1385,23 @@ body {
     padding: calc(1px * var(--ui-scale, 1)) calc(6px * var(--ui-scale, 1));
     border-radius: calc(8px * var(--ui-scale, 1));
     margin-left: calc(6px * var(--ui-scale, 1));
+}
+
+.member-row-menu {
+    flex-shrink: 0;
+    width: calc(30px * var(--ui-scale, 1));
+    height: calc(30px * var(--ui-scale, 1));
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: calc(14px * var(--ui-scale, 1));
+    transition: background 0.15s ease;
+}
+
+.member-row-menu:active {
+    background: var(--hover);
 }
 
 .chat-info-avatar-wrap {
