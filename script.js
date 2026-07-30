@@ -39,6 +39,11 @@ let shouldScrollDown = true;
 let replyTo = null;
 let savedAccounts = JSON.parse(localStorage.getItem('quark_accounts') || '[]');
 
+// --- stories ---
+let storiesByUser = {};
+let unsubscribeStories = null;
+let storyViewerTimer = null;
+
 // --- presence / typing realtime plumbing ---
 let unsubscribeUserStatus = null;
 let unsubscribeChatMeta = null;
@@ -151,7 +156,9 @@ function playSound() {
 
 function showCustomAlert(message) {
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:250;';
+    // z-index 500: must stay above .story-viewer-overlay (400) so this can be
+    // opened on top of the story viewer (e.g. "failed to load story" alerts).
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:500;';
 
     const bg = getComputedStyle(document.body).getPropertyValue('--glass').trim();
     const textColor = getComputedStyle(document.body).getPropertyValue('--text').trim();
@@ -175,7 +182,9 @@ function showCustomAlert(message) {
 
 function showCustomConfirm(message, onConfirm) {
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:250;';
+    // z-index 500: must stay above .story-viewer-overlay (400) so the
+    // "Удалить эту историю?" confirm shows on top of the story, not behind it.
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:500;';
 
     const bg = getComputedStyle(document.body).getPropertyValue('--glass').trim();
     const textColor = getComputedStyle(document.body).getPropertyValue('--text').trim();
@@ -299,6 +308,8 @@ function teardownSession() {
     if (unsubscribeUserStatus) { unsubscribeUserStatus(); unsubscribeUserStatus = null; }
     if (unsubscribeChatMeta) { unsubscribeChatMeta(); unsubscribeChatMeta = null; }
     if (unsubscribeTyping) { unsubscribeTyping(); unsubscribeTyping = null; }
+    if (unsubscribeStories) { unsubscribeStories(); unsubscribeStories = null; }
+    storiesByUser = {};
     stopHeartbeat();
     if (statusTickInterval) { clearInterval(statusTickInterval); statusTickInterval = null; }
     if (currentUser && currentChat && !isGroupLike(currentChat)) {
@@ -412,6 +423,7 @@ function buildMainUI() {
             <div class="header">
                 <span style="font-weight:700;font-size:19px;color:var(--text);">Quark</span>
             </div>
+            <div class="stories-row" id="storiesRow"></div>
             <div class="chat-scroll">
                 <div class="search-box">
                     <div class="search-wrapper"><i class="fas fa-search"></i><input type="text" class="search-input" id="searchInput" placeholder="Поиск людей, групп, каналов..."></div>
@@ -577,7 +589,9 @@ function renderOwnProfile() {
         '<div class="tg-cover-sub">' + (p.username ? '@' + p.username : '') + '</div>' +
         '</div>' +
         '</div>' +
-        '<div class="section-label first" style="margin-left:16px;">Личные данные</div>' +
+        '<div class="section-label first" style="margin-left:16px;">Мой канал</div>' +
+        '<div id="ownChannelSection"></div>' +
+        '<div class="section-label" style="margin-left:16px;">Личные данные</div>' +
         '<div class="tg-edit-list">' +
         '<div class="form-group"><label>Имя</label><input type="text" class="form-input" id="dnInput" value="' + (p.displayName || '').replace(/"/g, '&quot;') + '"></div>' +
         '<div class="form-group"><label>Username</label><input type="text" class="form-input" id="unInput" placeholder="@username" value="' + (p.username || '').replace(/"/g, '&quot;') + '"></div>' +
@@ -587,6 +601,8 @@ function renderOwnProfile() {
         '<div class="tg-danger-list">' +
         '<div class="tg-danger-row" id="logoutBtn"><i class="fas fa-sign-out-alt"></i> Выйти</div>' +
         '</div>';
+
+    renderOwnChannelSection();
 
     $('#saveProfBtn').onclick = async () => {
         const dn = $('#dnInput')?.value.trim();
@@ -679,6 +695,50 @@ function renderOwnProfile() {
     $('#logoutBtn').onclick = logout;
 }
 
+// Lets you pin one of your channels to your profile — like Telegram's
+// "add your channel" — so people viewing your profile see it and can
+// jump straight in.
+function renderOwnChannelSection() {
+    const el = $('#ownChannelSection');
+    if (!el) return;
+    const p = currentProfile || {};
+    const featured = p.featuredChannelId ? allChats[p.featuredChannelId] : null;
+
+    if (featured) {
+        el.innerHTML =
+            '<div class="tg-info-list"><div class="member-row" id="ownChannelRow">' +
+            '<div class="avatar">' + (featured.avatarUrl ? '<img src="' + featured.avatarUrl + '">' : initials(featured.name)) + '</div>' +
+            '<div class="member-row-info"><div class="member-row-name">' + (featured.name || 'Канал') + '</div>' +
+            '<div class="member-row-sub">' + (featured.username ? '@' + featured.username + ' &middot; ' : '') + (featured.members || []).length + ' подписчиков</div></div>' +
+            '</div></div>' +
+            '<button class="btn btn-danger" id="removeOwnChannelBtn" style="margin:0 16px 14px;width:calc(100% - 32px);">Убрать канал из профиля</button>';
+        $('#ownChannelRow').onclick = () => openChat(p.featuredChannelId);
+        $('#removeOwnChannelBtn').onclick = async () => {
+            await db.collection('users').doc(currentUser.uid).update({ featuredChannelId: firebase.firestore.FieldValue.delete() });
+            delete currentProfile.featuredChannelId;
+            renderOwnChannelSection();
+        };
+    } else {
+        el.innerHTML = '<div style="display:flex;justify-content:center;padding:6px 0 20px;"><div class="tg-action-btn" id="addOwnChannelBtn"><div class="circle"><i class="fas fa-bullhorn"></i></div><span>Добавить канал</span></div></div>';
+        $('#addOwnChannelBtn').onclick = () => {
+            const myChannels = Object.values(allChats).filter(c => c.type === 'channel' && (c.admins || []).includes(currentUser.uid));
+            if (!myChannels.length) {
+                showCustomConfirm('У вас пока нет своего канала. Создать его?', () => showCreateChatFlow('channel'));
+                return;
+            }
+            showActionSheet(myChannels.map(c => ({
+                label: c.name || 'Канал',
+                icon: 'fa-bullhorn',
+                onClick: async () => {
+                    await db.collection('users').doc(currentUser.uid).update({ featuredChannelId: c.id });
+                    currentProfile.featuredChannelId = c.id;
+                    renderOwnChannelSection();
+                }
+            })));
+        };
+    }
+}
+
 // ==================== INIT CHATS ====================
 async function initChats() {
     await loadAllUsers();
@@ -686,6 +746,7 @@ async function initChats() {
     await loadActiveChats();
     renderChatList();
     listenForMessages();
+    watchStories();
     setTimeout(initPush, 2000);
 }
 
@@ -823,10 +884,12 @@ function renderChatList() {
         else if (meta.type === 'channel') badge = '<span class="chat-badge">канал</span>';
         else if (meta.type === 'group') badge = '<span class="chat-badge">группа</span>';
 
+        const online = !isGroup && isUserOnline(meta) && canShowLastSeen(meta);
+
         const div = document.createElement('div');
         div.className = 'chat-item';
         div.innerHTML =
-            '<div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' +
+            '<div class="avatar-wrap"><div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' + (online ? '<span class="online-dot"></span>' : '') + '</div>' +
             '<div class="chat-info">' +
             '<div class="chat-name">' + name + badge + '</div>' +
             '<div class="chat-preview">' + preview + '</div>' +
@@ -854,6 +917,282 @@ function updateNavBadge() {
     } else {
         badge.classList.add('hidden');
     }
+}
+
+// ==================== STORIES ====================
+// Stories live 24h, like Telegram/WhatsApp Status. Images are stored the
+// same way chat images are — as compressed data URLs directly on the
+// Firestore doc, since this app has no separate file storage.
+function watchStories() {
+    if (unsubscribeStories) { unsubscribeStories(); unsubscribeStories = null; }
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    unsubscribeStories = db.collection('stories')
+        .where('timestamp', '>', dayAgo)
+        .orderBy('timestamp', 'asc')
+        .onSnapshot(snap => {
+            const byUser = {};
+            snap.forEach(doc => {
+                const s = { id: doc.id, ...doc.data() };
+                if (!s.userId) return;
+                (byUser[s.userId] = byUser[s.userId] || []).push(s);
+            });
+            storiesByUser = byUser;
+            renderStoriesRow();
+        }, () => {});
+}
+
+function renderStoriesRow() {
+    const row = $('#storiesRow');
+    if (!row || !currentUser) return;
+    row.innerHTML = '';
+
+    const myStories = storiesByUser[currentUser.uid] || [];
+    const p = currentProfile || {};
+    const mine = document.createElement('div');
+    mine.className = 'story-item';
+    mine.innerHTML =
+        '<div class="story-avatar-wrap' + (myStories.length ? ' has-story' : '') + '">' +
+        '<div class="avatar">' + (p.avatarUrl ? '<img src="' + p.avatarUrl + '">' : initials(p.displayName)) + '</div>' +
+        (myStories.length ? '' : '<div class="story-add-badge"><i class="fas fa-plus"></i></div>') +
+        '</div>' +
+        '<div class="story-name">Ваша история</div>';
+    mine.onclick = () => {
+        if (myStories.length) openStoryViewer(currentUser.uid);
+        else triggerStoryUpload();
+    };
+    row.appendChild(mine);
+
+    Object.keys(storiesByUser).forEach(uid => {
+        if (uid === currentUser.uid) return;
+        const stories = storiesByUser[uid];
+        if (!stories || !stories.length) return;
+        const u = allUsers[uid];
+        if (!u) return;
+        const allViewed = stories.every(s => (s.viewedBy || []).includes(currentUser.uid));
+        const item = document.createElement('div');
+        item.className = 'story-item';
+        item.innerHTML =
+            '<div class="story-avatar-wrap has-story' + (allViewed ? ' viewed' : '') + '">' +
+            '<div class="avatar">' + (u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u.displayName)) + '</div>' +
+            '</div>' +
+            '<div class="story-name">' + (u.displayName || 'Пользователь').split(' ')[0] + '</div>';
+        item.onclick = () => openStoryViewer(uid);
+        row.appendChild(item);
+    });
+}
+
+function triggerStoryUpload() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+        try {
+            const compressed = await compressFile(file);
+            openStoryComposer(compressed.dataUrl);
+        } catch (e) {
+            showCustomAlert('Не удалось загрузить историю');
+        }
+    };
+    input.click();
+}
+
+// Pre-publish preview: lets you write a caption over the picked image
+// before it goes out, like Telegram's story composer.
+function openStoryComposer(dataUrl) {
+    const overlay = document.createElement('div');
+    overlay.className = 'story-viewer-overlay story-composer-overlay';
+    overlay.innerHTML =
+        '<div class="story-viewer-header">' +
+        '<span class="story-viewer-name">Новая история</span>' +
+        '<span class="story-viewer-close" id="scClose"><i class="fas fa-times"></i></span>' +
+        '</div>' +
+        '<img class="story-viewer-img" src="' + dataUrl + '">' +
+        '<div class="story-composer-bar">' +
+        '<input type="text" class="story-caption-input" id="scCaptionInput" placeholder="Добавить подпись..." maxlength="200">' +
+        '<button class="story-composer-send" id="scSend"><i class="fas fa-paper-plane"></i></button>' +
+        '</div>';
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('#scClose').onclick = close;
+
+    const input = overlay.querySelector('#scCaptionInput');
+    const sendBtn = overlay.querySelector('#scSend');
+    sendBtn.onclick = async () => {
+        sendBtn.disabled = true;
+        const caption = input.value.trim();
+        try {
+            await db.collection('stories').add({
+                userId: currentUser.uid,
+                imageUrl: dataUrl,
+                caption: caption,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                viewedBy: []
+            });
+            close();
+        } catch (e) {
+            sendBtn.disabled = false;
+            showCustomAlert('Не удалось загрузить историю');
+        }
+    };
+}
+
+// Full-screen story viewer: progress segments across the top (one per
+// story), auto-advances every 5s, tap left/right (or the arrows) to
+// step through, and lets you delete your own story.
+function openStoryViewer(uid) {
+    const stories = storiesByUser[uid];
+    if (!stories || !stories.length) return;
+    let idx = 0;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'story-viewer-overlay';
+    document.body.appendChild(overlay);
+
+    function close() {
+        clearTimeout(storyViewerTimer);
+        overlay.remove();
+    }
+
+    function go(dir) {
+        idx += dir;
+        if (idx < 0 || idx >= stories.length) { close(); return; }
+        render();
+    }
+
+    function render() {
+        clearTimeout(storyViewerTimer);
+        const story = stories[idx];
+        const u = uid === currentUser.uid ? currentProfile : allUsers[uid];
+
+        const isMine = uid === currentUser.uid;
+        const viewerCount = (story.viewedBy || []).length;
+
+        overlay.innerHTML =
+            '<div class="story-progress-row">' +
+            stories.map((s, i) => '<div class="story-progress-seg"><div class="story-progress-fill' + (i < idx ? ' full' : '') + '"' + (i === idx ? ' style="animation:storyProgress 5s linear forwards;"' : '') + '></div></div>').join('') +
+            '</div>' +
+            '<div class="story-viewer-header">' +
+            '<div class="avatar">' + (u && u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u ? u.displayName : '')) + '</div>' +
+            '<span class="story-viewer-name">' + (u ? (u.displayName || 'Пользователь') : 'Пользователь') + '</span>' +
+            '<span class="story-viewer-time">' + formatTime(toMillis(story.timestamp)) + '</span>' +
+            '<span class="story-viewer-close" id="svClose"><i class="fas fa-times"></i></span>' +
+            '</div>' +
+            '<img class="story-viewer-img" src="' + story.imageUrl + '">' +
+            '<div class="story-tap-zone left" id="svPrev"></div>' +
+            '<div class="story-tap-zone right" id="svNext"></div>' +
+            '<div id="svCaptionSlot"></div>' +
+            (isMine ?
+                ('<div class="story-bottom-bar">' +
+                    '<div class="story-viewers-btn" id="svViewers"><i class="fas fa-eye"></i> <span>' + viewerCount + '</span></div>' +
+                    '<div class="story-delete-btn" id="svDelete"><i class="fas fa-trash"></i></div>' +
+                    '</div>')
+                : '');
+
+        // Built via textContent (not string-concatenated into the HTML
+        // above) so a caption can never inject markup into the overlay.
+        if (story.caption) {
+            const cap = document.createElement('div');
+            cap.className = 'story-caption';
+            cap.textContent = story.caption;
+            overlay.querySelector('#svCaptionSlot').replaceWith(cap);
+        } else {
+            overlay.querySelector('#svCaptionSlot').remove();
+        }
+
+        overlay.querySelector('#svClose').onclick = close;
+        overlay.querySelector('#svPrev').onclick = () => go(-1);
+        overlay.querySelector('#svNext').onclick = () => go(1);
+
+        const delBtn = overlay.querySelector('#svDelete');
+        if (delBtn) {
+            delBtn.onclick = (e) => {
+                e.stopPropagation();
+                clearTimeout(storyViewerTimer);
+                showCustomConfirm('Удалить эту историю?', async () => {
+                    try { await db.collection('stories').doc(story.id).delete(); } catch (e) {}
+                    stories.splice(idx, 1);
+                    if (!stories.length) { close(); return; }
+                    if (idx >= stories.length) idx = stories.length - 1;
+                    render();
+                });
+            };
+        }
+
+        const viewersBtn = overlay.querySelector('#svViewers');
+        if (viewersBtn) {
+            viewersBtn.onclick = (e) => {
+                e.stopPropagation();
+                clearTimeout(storyViewerTimer);
+                openStoryViewersList(story, () => { storyViewerTimer = setTimeout(() => go(1), 5000); });
+            };
+        }
+
+        if (uid !== currentUser.uid && !(story.viewedBy || []).includes(currentUser.uid)) {
+            db.collection('stories').doc(story.id).update({
+                viewedBy: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)
+            }).catch(() => {});
+        }
+
+        storyViewerTimer = setTimeout(() => go(1), 5000);
+    }
+
+    render();
+}
+
+// Bottom sheet listing who has viewed one of your own stories — like
+// Telegram/Instagram's "seen by" list.
+function openStoryViewersList(story, onClose) {
+    const viewers = story.viewedBy || [];
+
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    overlay.style.zIndex = '410';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet story-viewers-sheet';
+
+    const title = document.createElement('div');
+    title.className = 'story-viewers-title';
+    title.textContent = viewers.length
+        ? ('Просмотрели: ' + viewers.length)
+        : 'Пока никто не посмотрел';
+    sheet.appendChild(title);
+
+    if (viewers.length) {
+        const list = document.createElement('div');
+        list.className = 'tg-info-list';
+        viewers.forEach(vuid => {
+            const u = vuid === currentUser.uid ? currentProfile : allUsers[vuid];
+            const row = document.createElement('div');
+            row.className = 'member-row';
+            const avatarWrap = document.createElement('div');
+            avatarWrap.className = 'avatar';
+            if (u && u.avatarUrl) {
+                const img = document.createElement('img');
+                img.src = u.avatarUrl;
+                avatarWrap.appendChild(img);
+            } else {
+                avatarWrap.innerHTML = initials(u ? u.displayName : '');
+            }
+            const info = document.createElement('div');
+            info.className = 'member-row-info';
+            const name = document.createElement('div');
+            name.className = 'member-row-name';
+            name.textContent = u ? (u.displayName || 'Пользователь') : 'Пользователь';
+            info.appendChild(name);
+            row.appendChild(avatarWrap);
+            row.appendChild(info);
+            list.appendChild(row);
+        });
+        sheet.appendChild(list);
+    }
+
+    const close = () => { overlay.remove(); if (onClose) onClose(); };
+    overlay.appendChild(sheet);
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    document.body.appendChild(overlay);
 }
 
 // ==================== OPEN CHAT ====================
@@ -913,8 +1252,9 @@ function renderChatHeader(id) {
     if (av) av.onclick = () => (isGroup ? showChatInfo(id) : viewUserProfile(id));
 }
 
-// Hides/disables the composer for channels where the current user isn't
-// an admin (only admins may post in a channel, like Telegram).
+// Hides the composer for channels where the current user isn't an admin
+// (only admins may post in a channel, like Telegram) and offers an
+// Unsubscribe button in its place instead of just a locked note.
 function updateComposerAvailability(id) {
     const row = $('#inputRow');
     const lockedNote = $('#channelLockedNote');
@@ -927,10 +1267,28 @@ function updateComposerAvailability(id) {
     if (canPost) {
         row.classList.remove('hidden');
         lockedNote.classList.add('hidden');
+        lockedNote.innerHTML = '';
     } else {
         row.classList.add('hidden');
         lockedNote.classList.remove('hidden');
         if (replyBar) replyBar.classList.add('hidden');
+        lockedNote.innerHTML = '<button class="btn btn-danger" id="channelUnsubBtn" style="width:auto;padding:9px 20px;margin:0;"><i class="fas fa-user-minus"></i> Отписаться от канала</button>';
+        const unsubBtn = $('#channelUnsubBtn');
+        if (unsubBtn) {
+            unsubBtn.onclick = () => {
+                showCustomConfirm('Отписаться от этого канала?', async () => {
+                    try {
+                        await db.collection('chats').doc(id).update({
+                            members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid),
+                            admins: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)
+                        });
+                    } catch (e) { console.error('Unsubscribe error:', e); }
+                    activeChats.delete(id);
+                    showScreen('screenChats');
+                    renderChatList();
+                });
+            };
+        }
     }
 }
 
@@ -1755,10 +2113,17 @@ function viewUserProfile(uid, returnScreen) {
         '<div class="tg-actions-row">' +
         '<div class="tg-action-btn" id="vpMsgBtn"><div class="circle"><i class="fas fa-comment"></i></div><span>Написать</span></div>' +
         '</div>' +
+        '<div id="vpChannelSection"></div>' +
         '<div class="tg-info-list">' +
         (user.username ? '<div class="tg-info-row"><div class="tg-info-label">Username</div><div class="tg-info-value">@' + user.username + '</div></div>' : '') +
         (user.bio ? '<div class="tg-info-row"><div class="tg-info-label">О себе</div><div class="tg-info-value">' + user.bio + '</div></div>' : '') +
-        '</div>';
+        '</div>' +
+        mutualGroupsHtml(uid) +
+        '<div id="vpMediaSection"></div>';
+
+    body.querySelectorAll('.member-row[data-gid]').forEach(row => {
+        row.onclick = () => openChat(row.dataset.gid);
+    });
 
     $('#vpMsgBtn').onclick = () => {
         if (!activeChats.has(uid)) {
@@ -1768,7 +2133,113 @@ function viewUserProfile(uid, returnScreen) {
         openChat(uid);
     };
 
+    renderFeaturedChannelCard(user, $('#vpChannelSection'));
+    renderProfileMedia($('#vpMediaSection'), chatIdFor(uid));
+
     showScreen('screenViewProfile');
+}
+
+// Groups where both the profile owner and the current user are members —
+// shown at the bottom of a person's profile, like Telegram's "Общие группы".
+function mutualGroupsHtml(uid) {
+    const groups = Object.values(allChats).filter(c =>
+        c.type === 'group' &&
+        (c.members || []).includes(currentUser.uid) &&
+        (c.members || []).includes(uid)
+    );
+    if (!groups.length) return '';
+    let html = '<div class="section-label" style="margin-left:16px;">Общие группы</div><div class="tg-info-list">';
+    groups.forEach(c => {
+        html +=
+            '<div class="member-row" data-gid="' + c.id + '">' +
+            '<div class="avatar">' + (c.avatarUrl ? '<img src="' + c.avatarUrl + '">' : initials(c.name)) + '</div>' +
+            '<div class="member-row-info"><div class="member-row-name">' + (c.name || 'Группа') + '</div>' +
+            '<div class="member-row-sub">' + (c.members || []).length + ' участников</div></div>' +
+            '</div>';
+    });
+    html += '</div>';
+    return html;
+}
+
+// The channel a profile owner has chosen to feature on their profile (see
+// renderOwnChannelSection). The channel may not be one the viewer has
+// joined, so it's fetched directly rather than relying on the local cache.
+async function renderFeaturedChannelCard(profileOwner, container) {
+    if (!container) return;
+    const cid = profileOwner && profileOwner.featuredChannelId;
+    if (!cid) { container.innerHTML = ''; return; }
+
+    let chat = allChats[cid];
+    if (!chat) {
+        try {
+            const doc = await db.collection('chats').doc(cid).get();
+            if (doc.exists) chat = { id: doc.id, ...doc.data() };
+        } catch (e) { chat = null; }
+    }
+    if (!chat || chat.type !== 'channel') { container.innerHTML = ''; return; }
+
+    const isMember = (chat.members || []).includes(currentUser.uid);
+    container.innerHTML =
+        '<div class="section-label" style="margin-left:16px;">Канал</div>' +
+        '<div class="tg-info-list"><div class="member-row" id="vpChannelRow">' +
+        '<div class="avatar">' + (chat.avatarUrl ? '<img src="' + chat.avatarUrl + '">' : initials(chat.name)) + '</div>' +
+        '<div class="member-row-info"><div class="member-row-name">' + (chat.name || 'Канал') + '</div>' +
+        '<div class="member-row-sub">' + (chat.username ? '@' + chat.username + ' &middot; ' : '') + (chat.members || []).length + ' подписчиков</div></div>' +
+        (isMember ? '' : '<button class="btn btn-primary" id="vpChannelJoinBtn" style="width:auto;padding:8px 14px;font-size:13px;margin:0;">Подписаться</button>') +
+        '</div></div>';
+
+    const row = container.querySelector('#vpChannelRow');
+    if (row) row.onclick = () => openChat(chat.id);
+    const joinBtn = container.querySelector('#vpChannelJoinBtn');
+    if (joinBtn) {
+        joinBtn.onclick = async (e) => {
+            e.stopPropagation();
+            await db.collection('chats').doc(chat.id).update({
+                members: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)
+            });
+            openChat(chat.id);
+        };
+    }
+}
+
+// Recent photos shared in a conversation/group/channel — shown at the
+// bottom of the relevant profile screen, like Telegram's shared-media tab.
+async function renderProfileMedia(container, cid) {
+    if (!container) return;
+    container.innerHTML = '<div class="section-label" style="margin-left:16px;">Медиа</div><div class="tg-media-empty">Загрузка...</div>';
+    try {
+        // No orderBy here on purpose: combined with the chatId equality
+        // filter it would need a composite Firestore index that this
+        // project never creates, so the query used to fail silently and
+        // shared media never showed up anywhere. A plain equality filter
+        // only needs Firestore's automatic single-field index, so this
+        // always works — sort by time client-side instead.
+        const snap = await db.collection('messages').where('chatId', '==', cid).get();
+        const withTime = [];
+        snap.forEach(doc => {
+            const m = doc.data();
+            if (m.imageUrl) withTime.push({ url: m.imageUrl, ts: toMillis(m.timestamp) || 0 });
+        });
+        withTime.sort((a, b) => b.ts - a.ts);
+        const imgs = withTime.map(x => x.url);
+        if (!imgs.length) {
+            container.innerHTML = '<div class="section-label" style="margin-left:16px;">Медиа</div><div class="tg-media-empty">Общих медиа пока нет</div>';
+            return;
+        }
+        container.innerHTML = '<div class="section-label" style="margin-left:16px;">Медиа</div>';
+        const grid = document.createElement('div');
+        grid.className = 'tg-media-grid';
+        imgs.slice(0, 30).forEach(url => {
+            const thumb = document.createElement('div');
+            thumb.className = 'tg-media-thumb';
+            thumb.innerHTML = '<img src="' + url + '">';
+            thumb.onclick = () => viewFull(url);
+            grid.appendChild(thumb);
+        });
+        container.appendChild(grid);
+    } catch (e) {
+        container.innerHTML = '';
+    }
 }
 
 // ==================== ATTACH MENU ====================
@@ -1810,6 +2281,16 @@ function showScreen(id) {
     if (!isSub) {
         const list = ['screenChats', 'screenProfile', 'screenSettings'];
         $$('.nav-item').forEach((n, i) => n.classList.toggle('active', i === list.indexOf(id)));
+        // Leaving the chat/profile/info flow entirely (back to a bottom-nav
+        // tab) — currentChat used to stay set to whatever was last opened,
+        // which made handleIncomingChanges treat that chat as "still being
+        // viewed" forever, so its unread badge and notification sound would
+        // silently stop working after the first visit. Clearing it here
+        // means only a chat that's genuinely on screen suppresses those.
+        if (currentChat !== null) {
+            currentChat = null;
+            renderChatList();
+        }
     }
     if (id === 'screenProfile') renderOwnProfile();
 }
@@ -1992,10 +2473,13 @@ function showChatInfo(id) {
                 '<div class="section-label" style="margin-left:16px;">' + memberLabel.charAt(0).toUpperCase() + memberLabel.slice(1) + '</div>' +
                 '<div class="tg-info-list" id="ciMemberList"></div>'
             ) : '') +
+            '<div id="ciMediaSection"></div>' +
             '<div class="tg-danger-list">' +
             '<div class="tg-danger-row" id="ciLeave"><i class="fas fa-sign-out-alt"></i> Покинуть чат</div>' +
             (isAdmin ? '<div class="tg-danger-row" id="ciDelete"><i class="fas fa-trash"></i> Удалить чат</div>' : '') +
             '</div>';
+
+        renderProfileMedia(body.querySelector('#ciMediaSection'), id);
 
         const listEl = body.querySelector('#ciMemberList');
         if (listEl) {
@@ -2210,6 +2694,51 @@ function showAddMemberPicker(chatId) {
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 }
 
+// Tucks the stories tray away while scrolling down the chat list, and
+// brings it back on scroll up or once you're back at the top — mirrors
+// how Telegram collapses the stories row as you browse chats.
+function setupStoriesHideOnScroll() {
+    const scrollEl = document.querySelector('#screenChats .chat-scroll');
+    const row = $('#storiesRow');
+    if (!scrollEl || !row) return;
+    // anchorTop is only updated when we actually decide to toggle, not on
+    // every scroll event — comparing against the raw previous event (as
+    // before) made a fast flick fire dozens of scroll events per second,
+    // each nudging the 4px window and flipping the class back and forth,
+    // which is what made the stories row / sticky search bar visibly judder.
+    let anchorTop = 0;
+    let hidden = false;
+    let ticking = false;
+    const THRESHOLD = 16;
+
+    function evaluate() {
+        ticking = false;
+        const top = scrollEl.scrollTop;
+        if (top <= 4) {
+            if (hidden) { row.classList.remove('stories-hidden'); hidden = false; }
+            anchorTop = top;
+            return;
+        }
+        const delta = top - anchorTop;
+        if (!hidden && delta > THRESHOLD) {
+            row.classList.add('stories-hidden');
+            hidden = true;
+            anchorTop = top;
+        } else if (hidden && delta < -THRESHOLD) {
+            row.classList.remove('stories-hidden');
+            hidden = false;
+            anchorTop = top;
+        }
+    }
+
+    scrollEl.addEventListener('scroll', () => {
+        if (!ticking) {
+            ticking = true;
+            requestAnimationFrame(evaluate);
+        }
+    }, { passive: true });
+}
+
 // ==================== SETUP LISTENERS ====================
 function setupListeners() {
     $$('.nav-item').forEach(n => n.onclick = () => showScreen(n.dataset.sc));
@@ -2217,6 +2746,7 @@ function setupListeners() {
     $('#cancelSelectBtn').onclick = () => toggleSelect();
     $('#deleteSelectedBtn').onclick = deleteSelected;
     $('#newChatBtn').onclick = showCreateChatMenu;
+    setupStoriesHideOnScroll();
 
     const sendBtn = $('#sendBtn');
     // Prevents the classic "keyboard closes then reopens" flicker: by

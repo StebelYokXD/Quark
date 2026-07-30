@@ -392,6 +392,22 @@ body {
     background: var(--surface);
 }
 
+.avatar-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.online-dot {
+    position: absolute;
+    bottom: calc(1px * var(--ui-scale, 1));
+    right: calc(1px * var(--ui-scale, 1));
+    width: calc(13px * var(--ui-scale, 1));
+    height: calc(13px * var(--ui-scale, 1));
+    border-radius: 50%;
+    background: #10B981;
+    border: calc(2px * var(--ui-scale, 1)) solid var(--bg);
+}
+
 .avatar {
     width: calc(52px * var(--ui-scale, 1));
     height: calc(52px * var(--ui-scale, 1));
@@ -1667,6 +1683,39 @@ body {
     margin: 0 16px 16px;
 }
 
+.tg-media-grid {
+    margin: 0 calc(16px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: calc(3px * var(--ui-scale, 1));
+    border-radius: calc(14px * var(--ui-scale, 1));
+    overflow: hidden;
+}
+
+.tg-media-thumb {
+    aspect-ratio: 1 / 1;
+    cursor: pointer;
+    background: var(--surface);
+}
+
+.tg-media-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.tg-media-empty {
+    margin: 0 calc(16px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    padding: calc(16px * var(--ui-scale, 1));
+    text-align: center;
+    font-size: calc(13px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    background: var(--glass);
+    border-radius: calc(14px * var(--ui-scale, 1));
+    border: 1px solid var(--glass-border);
+}
+
 .tg-edit-list {
     margin: calc(16px * var(--ui-scale, 1));
     background: var(--glass);
@@ -1717,4 +1766,334 @@ body {
 
 .tg-info-list .member-row:last-child {
     border-bottom: none;
+}
+
+/* ==================== STORIES ==================== */
+.stories-row {
+    display: flex;
+    gap: calc(14px * var(--ui-scale, 1));
+    padding: calc(10px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+    background: var(--glass);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 1px 0 var(--glass-border);
+    max-height: calc(94px * var(--ui-scale, 1));
+    transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.18s ease;
+}
+
+/* Collapsed when the chat list below is scrolled down, like Telegram
+   tucking the stories tray away as you browse the chat list. */
+.stories-row.stories-hidden {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    overflow: hidden;
+    box-shadow: none;
+}
+
+.stories-row::-webkit-scrollbar {
+    display: none;
+}
+
+.story-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(4px * var(--ui-scale, 1));
+    flex-shrink: 0;
+    width: calc(60px * var(--ui-scale, 1));
+    cursor: pointer;
+}
+
+.story-avatar-wrap {
+    position: relative;
+    width: calc(56px * var(--ui-scale, 1));
+    height: calc(56px * var(--ui-scale, 1));
+    border-radius: 50%;
+    padding: calc(2.5px * var(--ui-scale, 1));
+}
+
+.story-avatar-wrap.has-story {
+    background: linear-gradient(135deg, var(--primary), #A78BFA, #EC4899);
+}
+
+.story-avatar-wrap.has-story.viewed {
+    background: var(--glass-border);
+}
+
+.story-avatar-wrap .avatar {
+    width: 100%;
+    height: 100%;
+    border: calc(2px * var(--ui-scale, 1)) solid var(--bg);
+    font-size: calc(16px * var(--ui-scale, 1));
+}
+
+.story-add-badge {
+    position: absolute;
+    bottom: calc(-1px * var(--ui-scale, 1));
+    right: calc(-1px * var(--ui-scale, 1));
+    width: calc(19px * var(--ui-scale, 1));
+    height: calc(19px * var(--ui-scale, 1));
+    border-radius: 50%;
+    background: var(--primary);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(10px * var(--ui-scale, 1));
+    border: calc(2px * var(--ui-scale, 1)) solid var(--bg);
+}
+
+.story-name {
+    font-size: calc(11px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+
+.story-viewer-overlay {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    animation: pop 0.15s ease;
+}
+
+.story-progress-row {
+    display: flex;
+    gap: calc(4px * var(--ui-scale, 1));
+    padding: calc(10px * var(--ui-scale, 1)) calc(10px * var(--ui-scale, 1)) 0;
+}
+
+.story-progress-seg {
+    flex: 1;
+    height: calc(3px * var(--ui-scale, 1));
+    border-radius: calc(2px * var(--ui-scale, 1));
+    background: rgba(255, 255, 255, 0.3);
+    overflow: hidden;
+}
+
+.story-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: white;
+    border-radius: calc(2px * var(--ui-scale, 1));
+}
+
+.story-progress-fill.full {
+    width: 100%;
+}
+
+@keyframes storyProgress {
+    from { width: 0%; }
+    to { width: 100%; }
+}
+
+.story-viewer-header {
+    display: flex;
+    align-items: center;
+    gap: calc(10px * var(--ui-scale, 1));
+    padding: calc(10px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1));
+    position: relative;
+    z-index: 2;
+}
+
+.story-viewer-header .avatar {
+    width: calc(32px * var(--ui-scale, 1));
+    height: calc(32px * var(--ui-scale, 1));
+    font-size: calc(13px * var(--ui-scale, 1));
+}
+
+.story-viewer-name {
+    color: white;
+    font-weight: 600;
+    font-size: calc(14px * var(--ui-scale, 1));
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.story-viewer-time {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: calc(12px * var(--ui-scale, 1));
+}
+
+.story-viewer-close {
+    color: white;
+    font-size: calc(18px * var(--ui-scale, 1));
+    padding: calc(4px * var(--ui-scale, 1));
+    cursor: pointer;
+}
+
+.story-viewer-img {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    object-fit: contain;
+    background: #000;
+}
+
+.story-tap-zone {
+    position: absolute;
+    top: calc(50px * var(--ui-scale, 1));
+    bottom: calc(60px * var(--ui-scale, 1));
+    width: 33%;
+}
+
+.story-tap-zone.left {
+    left: 0;
+}
+
+.story-tap-zone.right {
+    right: 0;
+}
+
+.story-viewer-delete {
+    position: absolute;
+    bottom: calc(18px * var(--ui-scale, 1));
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(239, 68, 68, 0.85);
+    color: white;
+    padding: calc(9px * var(--ui-scale, 1)) calc(18px * var(--ui-scale, 1));
+    border-radius: calc(20px * var(--ui-scale, 1));
+    font-size: calc(13px * var(--ui-scale, 1));
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: calc(6px * var(--ui-scale, 1));
+    z-index: 2;
+}
+
+/* Caption overlaid near the bottom of a story image, like Telegram/WA Status */
+.story-caption {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(74px * var(--ui-scale, 1));
+    padding: calc(10px * var(--ui-scale, 1)) calc(22px * var(--ui-scale, 1));
+    color: white;
+    font-size: calc(14.5px * var(--ui-scale, 1));
+    line-height: 1.4;
+    text-align: center;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 12px rgba(0, 0, 0, 0.4);
+    z-index: 2;
+    word-break: break-word;
+    pointer-events: none;
+}
+
+/* Own-story bottom bar: view count on the left, delete on the right */
+.story-bottom-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: calc(12px * var(--ui-scale, 1)) calc(18px * var(--ui-scale, 1)) calc(calc(12px * var(--ui-scale, 1)) + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(10px * var(--ui-scale, 1));
+    z-index: 2;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.story-viewers-btn {
+    display: flex;
+    align-items: center;
+    gap: calc(7px * var(--ui-scale, 1));
+    color: white;
+    font-size: calc(13.5px * var(--ui-scale, 1));
+    font-weight: 600;
+    padding: calc(8px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1));
+    border-radius: calc(20px * var(--ui-scale, 1));
+    background: rgba(255, 255, 255, 0.15);
+    cursor: pointer;
+}
+
+.story-delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(36px * var(--ui-scale, 1));
+    height: calc(36px * var(--ui-scale, 1));
+    border-radius: 50%;
+    background: rgba(239, 68, 68, 0.85);
+    color: white;
+    font-size: calc(14px * var(--ui-scale, 1));
+    cursor: pointer;
+}
+
+/* Story composer: caption input shown over the picked image before posting */
+.story-composer-overlay .story-viewer-img {
+    flex: 1;
+}
+
+.story-composer-bar {
+    display: flex;
+    align-items: center;
+    gap: calc(10px * var(--ui-scale, 1));
+    padding: calc(12px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1)) calc(calc(12px * var(--ui-scale, 1)) + env(safe-area-inset-bottom, 0px));
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 2;
+}
+
+.story-caption-input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: calc(20px * var(--ui-scale, 1));
+    padding: calc(10px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    color: white;
+    font-size: calc(14px * var(--ui-scale, 1));
+    outline: none;
+}
+
+.story-caption-input::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.story-composer-send {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(40px * var(--ui-scale, 1));
+    height: calc(40px * var(--ui-scale, 1));
+    border-radius: 50%;
+    background: var(--primary);
+    color: white;
+    border: none;
+    font-size: calc(15px * var(--ui-scale, 1));
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.story-composer-send:disabled {
+    opacity: 0.6;
+}
+
+/* Viewers-list bottom sheet, reusing the action-sheet chrome */
+.story-viewers-sheet {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding-bottom: calc(16px * var(--ui-scale, 1));
+}
+
+.story-viewers-title {
+    font-weight: 700;
+    font-size: calc(15px * var(--ui-scale, 1));
+    color: var(--text);
+    text-align: center;
+    padding: calc(6px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1)) calc(10px * var(--ui-scale, 1));
 }
