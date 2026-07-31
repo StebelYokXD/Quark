@@ -100,140 +100,6 @@ body {
     }
 }
 
-/* ==================== DESKTOP TWO-PANE LAYOUT ====================
-   Above DESKTOP_BREAKPOINT (script.js) the app stops behaving like a
-   single-screen phone view and switches to a two-pane layout like
-   Telegram Web: the chat list stays visible on the left and the open
-   chat sits next to it on the right. No separate sidebar/rail — the
-   Чаты/Профиль/Настройки switcher and the zoom control just live in
-   the chat list's own header instead (#desktopHeaderActions below),
-   and the mobile bottom tab bar is hidden entirely.
-   The underlying screen markup/logic is unchanged (still one .screen
-   per view) — this only repositions #screenChats and keeps
-   #screenMessages visible by default instead of only when "active",
-   so the right pane isn't blank before a chat is opened. */
-@media (min-width: 980px) {
-    .app {
-        max-width: calc(1320px * var(--ui-scale, 1));
-        max-height: none;
-        height: calc(100vh - 40px);
-    }
-
-    .main-content {
-        flex-direction: row;
-    }
-
-    #bottomNav {
-        display: none;
-    }
-
-    #screenChats {
-        display: flex;
-        flex: 0 0 calc(340px * var(--ui-scale, 1));
-        width: calc(340px * var(--ui-scale, 1));
-        max-width: calc(340px * var(--ui-scale, 1));
-        border-right: 1px solid var(--glass-border);
-    }
-
-    .screen:not(#screenChats) {
-        flex: 1;
-        min-width: 0;
-    }
-
-    /* Keep the chat pane showing its own empty state ("Выберите чат") by
-       default, rather than a blank gray gap, whenever none of the
-       full-pane overlay screens (settings/profile/chat-info) are open. */
-    .main-content:not(:has(#screenSettings.active)):not(:has(#screenProfile.active)):not(:has(#screenViewProfile.active)):not(:has(#screenChatInfo.active)) #screenMessages {
-        display: flex;
-    }
-
-    /* No need for a "back to chat list" button when the list is always
-       visible next to the chat. */
-    #backBtn {
-        display: none;
-    }
-
-    .desktop-header-actions {
-        display: flex;
-    }
-}
-
-#screenChats .header {
-    justify-content: space-between;
-}
-
-/* Hidden on mobile — becomes visible (flex) in the chat list header via
-   the media query above. */
-.desktop-header-actions {
-    display: none;
-    align-items: center;
-    gap: calc(6px * var(--ui-scale, 1));
-}
-
-.dt-nav-btn {
-    width: calc(30px * var(--ui-scale, 1));
-    height: calc(30px * var(--ui-scale, 1));
-    border-radius: calc(9px * var(--ui-scale, 1));
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: calc(13px * var(--ui-scale, 1));
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s ease, color 0.15s ease;
-}
-
-.dt-nav-btn:hover {
-    background: var(--hover);
-}
-
-.dt-nav-btn.active {
-    background: var(--surface);
-    color: var(--primary);
-}
-
-.desktop-scale-control {
-    display: flex;
-    align-items: center;
-    gap: calc(4px * var(--ui-scale, 1));
-    margin-left: calc(4px * var(--ui-scale, 1));
-    padding-left: calc(8px * var(--ui-scale, 1));
-    border-left: 1px solid var(--glass-border);
-}
-
-.scale-btn {
-    width: calc(24px * var(--ui-scale, 1));
-    height: calc(24px * var(--ui-scale, 1));
-    border-radius: 50%;
-    border: none;
-    background: var(--surface);
-    color: var(--text-secondary);
-    font-size: calc(10px * var(--ui-scale, 1));
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s ease, color 0.15s ease;
-}
-
-.scale-btn:hover {
-    background: var(--hover);
-    color: var(--primary);
-}
-
-.scale-btn:active {
-    transform: scale(0.9);
-}
-
-.scale-value {
-    font-size: calc(10px * var(--ui-scale, 1));
-    font-weight: 600;
-    color: var(--text-secondary);
-    min-width: calc(30px * var(--ui-scale, 1));
-    text-align: center;
-}
 
 
 .header {
@@ -2549,4 +2415,146 @@ body {
 
 .comments-send-btn:disabled {
     opacity: 0.6;
+}
+
+/* ==================== DESKTOP TWO-PANE LAYOUT ====================
+   Above DESKTOP_BREAKPOINT (script.js) the app stops behaving like a
+   single-screen phone view and switches to a two-pane layout like
+   Telegram Web: the chat list stays visible on the left and the open
+   chat sits next to it on the right. No separate sidebar/rail — the
+   Чаты/Профиль/Настройки switcher and the zoom control just live in
+   the chat list's own header instead (.desktop-header-actions below),
+   and the mobile bottom tab bar is hidden entirely.
+   The underlying screen markup/logic is unchanged (still one .screen
+   per view) — this only repositions #screenChats and keeps
+   #screenMessages visible by default instead of only when "active",
+   so the right pane isn't blank before a chat is opened.
+
+   IMPORTANT: every base/default rule below (hidden on mobile) is
+   written BEFORE the @media override that turns it on for desktop.
+   With equal specificity, CSS lets the later rule in the file win
+   regardless of media query — so if the override came first and a
+   same-specificity base rule followed it later in the file, the base
+   rule would silently win at every width and the override would never
+   take effect. That exact bug happened here once already; keep the
+   ordering base-rule-then-media-override for anything added below. */
+#screenChats .header {
+    justify-content: space-between;
+}
+
+.desktop-header-actions {
+    display: none;
+    align-items: center;
+    gap: calc(6px * var(--ui-scale, 1));
+}
+
+.dt-nav-btn {
+    width: calc(30px * var(--ui-scale, 1));
+    height: calc(30px * var(--ui-scale, 1));
+    border-radius: calc(9px * var(--ui-scale, 1));
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: calc(13px * var(--ui-scale, 1));
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dt-nav-btn:hover {
+    background: var(--hover);
+}
+
+.dt-nav-btn.active {
+    background: var(--surface);
+    color: var(--primary);
+}
+
+.desktop-scale-control {
+    display: flex;
+    align-items: center;
+    gap: calc(4px * var(--ui-scale, 1));
+    margin-left: calc(4px * var(--ui-scale, 1));
+    padding-left: calc(8px * var(--ui-scale, 1));
+    border-left: 1px solid var(--glass-border);
+}
+
+.scale-btn {
+    width: calc(24px * var(--ui-scale, 1));
+    height: calc(24px * var(--ui-scale, 1));
+    border-radius: 50%;
+    border: none;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: calc(10px * var(--ui-scale, 1));
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.scale-btn:hover {
+    background: var(--hover);
+    color: var(--primary);
+}
+
+.scale-btn:active {
+    transform: scale(0.9);
+}
+
+.scale-value {
+    font-size: calc(10px * var(--ui-scale, 1));
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: calc(30px * var(--ui-scale, 1));
+    text-align: center;
+}
+
+@media (min-width: 980px) {
+    .app {
+        max-width: calc(1320px * var(--ui-scale, 1));
+        max-height: none;
+        height: calc(100vh - 40px);
+    }
+
+    .main-content {
+        flex-direction: row;
+    }
+
+    #bottomNav {
+        display: none;
+    }
+
+    #screenChats {
+        display: flex;
+        flex: 0 0 calc(340px * var(--ui-scale, 1));
+        width: calc(340px * var(--ui-scale, 1));
+        max-width: calc(340px * var(--ui-scale, 1));
+        border-right: 1px solid var(--glass-border);
+    }
+
+    .screen:not(#screenChats) {
+        flex: 1;
+        min-width: 0;
+    }
+
+    /* Keep the chat pane showing its own empty state ("Выберите чат") by
+       default, rather than a blank gray gap, whenever none of the
+       full-pane overlay screens (settings/profile/chat-info) are open. */
+    .main-content:not(:has(#screenSettings.active)):not(:has(#screenProfile.active)):not(:has(#screenViewProfile.active)):not(:has(#screenChatInfo.active)) #screenMessages {
+        display: flex;
+    }
+
+    /* No need for a "back to chat list" button when the list is always
+       visible next to the chat. */
+    #backBtn {
+        display: none;
+    }
+
+    .desktop-header-actions {
+        display: flex;
+    }
 }
