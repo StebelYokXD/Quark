@@ -107,6 +107,20 @@ function formatTime(ts) {
 // timestamp before the real one arrives) — new Date(null) would show it
 // as 1970. Falling back to "now" instead keeps it looking normal until
 // the follow-up "modified" event fills in the real timestamp.
+// Only the fields a bubble actually renders — used to skip rebuilding a
+// message's DOM node on a 'modified' event that didn't change anything
+// visible (most commonly: our own just-sent message getting its pending
+// serverTimestamp() resolved a moment after the optimistic local write).
+function msgVisualsEqual(a, b) {
+    return a.text === b.text &&
+        a.imageUrl === b.imageUrl &&
+        a.fileName === b.fileName &&
+        a.replyTo === b.replyTo &&
+        (a.commentCount || 0) === (b.commentCount || 0) &&
+        JSON.stringify(a.reactions || {}) === JSON.stringify(b.reactions || {}) &&
+        JSON.stringify(a.readBy || []) === JSON.stringify(b.readBy || []);
+}
+
 function msgDateOf(msg) {
     if (msg.timestamp && msg.timestamp.toDate) return msg.timestamp.toDate();
     if (msg.timestamp) return new Date(msg.timestamp);
@@ -1840,8 +1854,14 @@ function applyMessageChanges(changes, cid) {
         }
 
         if (change.type === 'modified') {
+            const prevData = idx > -1 ? msgs[idx] : null;
             if (idx > -1) msgs[idx] = data; else msgs.push(data);
-            if (area) {
+            // Sending a message fires 'added' (pending write) immediately
+            // followed by 'modified' (server-confirmed timestamp) — with
+            // nothing actually different on screen. Rebuilding the bubble
+            // for that is what caused the post-send blink, so only touch
+            // the DOM when something visible really changed.
+            if (area && (!prevData || !msgVisualsEqual(prevData, data))) {
                 const pos = msgs.findIndex(x => x.id === id);
                 const nextMsg = msgs[pos + 1];
                 const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
