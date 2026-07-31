@@ -628,28 +628,38 @@ body {
 }
 
 .reaction-emoji-btn {
-    font-size: calc(22px * var(--ui-scale, 1));
+    font-size: calc(19px * var(--ui-scale, 1));
     cursor: pointer;
-    padding: calc(6px * var(--ui-scale, 1));
+    padding: calc(4px * var(--ui-scale, 1));
     border-radius: 50%;
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease, background 0.15s ease;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(30px * var(--ui-scale, 1));
+    height: calc(30px * var(--ui-scale, 1));
+    flex-shrink: 0;
 }
 
 .reaction-emoji-btn:hover {
-    transform: scale(1.3);
+    transform: scale(1.25);
+    background: var(--hover);
 }
 
-/* Context menu */
+/* Context menu — compact: collapsible reaction grid on top, icon-only
+   action row underneath. */
 .msg-context-menu {
     position: absolute;
     background: var(--glass);
     backdrop-filter: blur(30px);
     -webkit-backdrop-filter: blur(30px);
-    border-radius: calc(14px * var(--ui-scale, 1));
+    border-radius: calc(16px * var(--ui-scale, 1));
     box-shadow: var(--shadow-md);
-    padding: calc(6px * var(--ui-scale, 1)) 0;
+    padding: calc(8px * var(--ui-scale, 1));
     z-index: 50;
-    min-width: calc(140px * var(--ui-scale, 1));
+    width: calc(268px * var(--ui-scale, 1));
+    max-width: calc(88vw);
     border: 1px solid var(--glass-border);
     animation: menuIn 0.2s ease;
 }
@@ -665,13 +675,172 @@ body {
     }
 }
 
+.mcm-reactions-wrap {
+    position: relative;
+}
+
+.mcm-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(2px * var(--ui-scale, 1));
+    max-height: calc(34px * var(--ui-scale, 1));
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+}
+
+.mcm-reactions.expanded {
+    max-height: calc(230px * var(--ui-scale, 1));
+    overflow-y: auto;
+}
+
+.mcm-reaction-toggle {
+    width: 100%;
+    text-align: center;
+    padding: calc(3px * var(--ui-scale, 1)) 0 0;
+    margin-top: calc(2px * var(--ui-scale, 1));
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: calc(11px * var(--ui-scale, 1));
+    cursor: pointer;
+    border-top: 1px solid var(--glass-border);
+}
+
+.mcm-reaction-toggle:hover {
+    color: var(--primary);
+}
+
+.mcm-actions {
+    display: flex;
+    border-top: 1px solid var(--glass-border);
+    margin-top: calc(6px * var(--ui-scale, 1));
+    padding-top: calc(6px * var(--ui-scale, 1));
+    gap: calc(2px * var(--ui-scale, 1));
+}
+
+.mcm-action-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(3px * var(--ui-scale, 1));
+    padding: calc(6px * var(--ui-scale, 1)) calc(2px * var(--ui-scale, 1));
+    border: none;
+    background: transparent;
+    border-radius: calc(10px * var(--ui-scale, 1));
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.mcm-action-btn i {
+    font-size: calc(15px * var(--ui-scale, 1));
+}
+
+.mcm-action-btn span {
+    font-size: calc(9.5px * var(--ui-scale, 1));
+    white-space: nowrap;
+}
+
+.mcm-action-btn:hover {
+    background: var(--hover);
+}
+
+.mcm-action-btn.danger {
+    color: var(--danger);
+}
+
+.verified-badge {
+    color: #29b6f6;
+    font-size: 0.82em;
+    margin-left: 3px;
+    vertical-align: middle;
+}
+
+/* Smooth bubble entrance — only applied to genuinely new messages (see
+   isNew in appendMsg/renderMessagesSnapshot), not the whole chat history
+   every time it re-renders. */
+.msg-wrap.msg-appear {
+    animation: msgAppear 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes msgAppear {
+    from {
+        opacity: 0;
+        transform: translateY(14px) scale(0.92);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.msg-mention {
+    color: var(--primary);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.msg-mention:hover {
+    text-decoration: underline;
+}
+
 /* Input */
 .input-container {
     flex-shrink: 0;
+    position: relative;
     background: var(--glass);
     backdrop-filter: blur(26px) saturate(1.4);
     -webkit-backdrop-filter: blur(26px) saturate(1.4);
     box-shadow: 0 -1px 0 var(--glass-border);
+}
+
+.mention-suggestions {
+    position: absolute;
+    left: calc(10px * var(--ui-scale, 1));
+    right: calc(10px * var(--ui-scale, 1));
+    bottom: 100%;
+    margin-bottom: calc(6px * var(--ui-scale, 1));
+    background: var(--glass);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid var(--glass-border);
+    border-radius: calc(14px * var(--ui-scale, 1));
+    box-shadow: var(--shadow-md);
+    max-height: calc(220px * var(--ui-scale, 1));
+    overflow-y: auto;
+    z-index: 40;
+    animation: menuIn 0.15s ease;
+}
+
+.mention-suggestion-row {
+    display: flex;
+    align-items: center;
+    gap: calc(10px * var(--ui-scale, 1));
+    padding: calc(8px * var(--ui-scale, 1)) calc(12px * var(--ui-scale, 1));
+    cursor: pointer;
+}
+
+.mention-suggestion-row:hover {
+    background: var(--hover);
+}
+
+.mention-suggestion-info {
+    min-width: 0;
+}
+
+.mention-suggestion-name {
+    font-size: calc(13px * var(--ui-scale, 1));
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mention-suggestion-uname {
+    font-size: calc(11.5px * var(--ui-scale, 1));
+    color: var(--primary);
 }
 
 .reply-bar {

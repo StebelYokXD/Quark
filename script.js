@@ -24,6 +24,11 @@ let activeChats = new Set();    // DM partner uids
 let myChatIds = new Set();      // group/channel ids I'm a member of
 let currentChat = null;         // either a uid (DM) or a chat id (group/channel/general)
 let messageCache = {};
+// Which message ids have already been shown (at least once) in each chat's
+// current render pass — lets renderMessagesSnapshot tell a genuinely new
+// message apart from the rest of the chat re-rendering around it, so only
+// the new one gets the appear animation.
+let renderedMsgIds = {};
 let lastMessagePreviews = {};
 let lastMessageTimes = {};
 let unreadCounts = {};
@@ -126,6 +131,147 @@ function chatIdFor(id) {
 function otherDmUid(cid) {
     const parts = cid.split('_');
     return parts.find(p => p !== currentUser.uid);
+}
+
+// Usernames are one shared namespace across people AND chats/channels —
+// a person and a channel can't both be @something. Checks both
+// collections and excludes the doc currently being saved (if any).
+async function isUsernameTaken(username, opts) {
+    opts = opts || {};
+    const [userSnap, chatSnap] = await Promise.all([
+        db.collection('users').where('username', '==', username).get(),
+        db.collection('chats').where('username', '==', username).get()
+    ]);
+    const userConflict = userSnap.docs.some(d => d.id !== opts.excludeUserId);
+    const chatConflict = chatSnap.docs.some(d => d.id !== opts.excludeChatId);
+    return userConflict || chatConflict;
+}
+
+// Finds the user or chat/channel behind an @username for mention
+// rendering and autocomplete. Case-insensitive.
+function findMentionTarget(username) {
+    const uname = username.toLowerCase();
+    const user = Object.values(allUsers).find(u => (u.username || '').toLowerCase() === uname);
+    if (user) return { kind: 'user', id: user.id, obj: user };
+    const chat = Object.values(allChats).find(c => (c.username || '').toLowerCase() === uname);
+    if (chat) return { kind: 'chat', id: chat.id, obj: chat };
+    return null;
+}
+
+// Jumps to whatever a mention points at — same behavior as tapping that
+// user/chat in search results. Also closes the comments overlay first,
+// since mentions can be tapped from inside it.
+function goToMention(kind, id) {
+    document.querySelectorAll('.comments-overlay').forEach(o => o.remove());
+    if (unsubscribeComments) { unsubscribeComments(); unsubscribeComments = null; }
+    if (kind === 'user') {
+        if (!activeChats.has(id)) {
+            activeChats.add(id);
+            loadChatPreview(id, chatIdFor(id));
+        }
+    }
+    openChat(id);
+    showScreen('screenMessages');
+}
+
+const MENTION_RE = /(^|[^\w@])@([a-zA-Z0-9_]{3,32})\b/g;
+
+// Builds message text as a DOM fragment (never innerHTML, to stay
+// injection-safe) with any @username that resolves to a known user or
+// chat/channel turned into a clickable mention span.
+function renderTextWithMentions(text) {
+    const frag = document.createDocumentFragment();
+    let lastIndex = 0;
+    let match;
+    MENTION_RE.lastIndex = 0;
+    while ((match = MENTION_RE.exec(text))) {
+        const prefix = match[1];
+        const uname = match[2];
+        const start = match.index + prefix.length;
+        const end = start + 1 + uname.length;
+        const target = findMentionTarget(uname);
+        if (!target) {
+            MENTION_RE.lastIndex = end;
+            continue;
+        }
+        if (start > lastIndex) frag.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+        const span = document.createElement('span');
+        span.className = 'msg-mention';
+        span.textContent = '@' + uname;
+        span.onclick = function (e) {
+            e.stopPropagation();
+            goToMention(target.kind, target.id);
+        };
+        frag.appendChild(span);
+        lastIndex = end;
+    }
+    if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+    return frag;
+}
+
+// ==================== MENTION AUTOCOMPLETE ====================
+// While typing, finds the @token touching the cursor (if any — no
+// whitespace between the @ and the caret) and shows matching users and
+// chats/channels by username so you can tap to insert it.
+function activeMentionToken(input) {
+    const pos = input.selectionStart;
+    const before = input.value.slice(0, pos);
+    const at = before.lastIndexOf('@');
+    if (at === -1) return null;
+    const token = before.slice(at + 1);
+    if (/\s/.test(token)) return null;
+    if (at > 0 && /\w/.test(before[at - 1])) return null; // "email@x" isn't a mention
+    return { start: at, query: token };
+}
+
+function hideMentionSuggestions() {
+    const box = $('#mentionSuggestions');
+    if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+}
+
+function updateMentionSuggestions(input) {
+    const box = $('#mentionSuggestions');
+    if (!box) return;
+    const active = activeMentionToken(input);
+    if (!active) return hideMentionSuggestions();
+
+    const q = active.query.toLowerCase();
+    const results = [];
+    Object.values(allUsers).forEach(u => {
+        if (u.id === currentUser.uid) return;
+        if (u.username && u.username.toLowerCase().startsWith(q)) results.push({ kind: 'user', obj: u });
+    });
+    Object.values(allChats).forEach(c => {
+        if (c.id === GENERAL_CHAT_ID) return;
+        if (c.username && c.username.toLowerCase().startsWith(q)) results.push({ kind: 'chat', obj: c });
+    });
+    if (!results.length) return hideMentionSuggestions();
+
+    box.innerHTML = '';
+    results.slice(0, 6).forEach(r => {
+        const name = r.kind === 'user' ? (r.obj.displayName || 'Пользователь') : (r.obj.name || 'Чат');
+        const avatarUrl = r.obj.avatarUrl;
+        const row = document.createElement('div');
+        row.className = 'mention-suggestion-row';
+        row.innerHTML =
+            '<div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' +
+            '<div class="mention-suggestion-info"><div class="mention-suggestion-name">' + name + '</div>' +
+            '<div class="mention-suggestion-uname">@' + r.obj.username + '</div></div>';
+        row.onmousedown = function (e) {
+            // mousedown (not click) fires before the textarea's blur, so
+            // we can still read/replace its content correctly.
+            e.preventDefault();
+            const before = input.value.slice(0, active.start);
+            const after = input.value.slice(active.start + 1 + active.query.length);
+            input.value = before + '@' + r.obj.username + ' ' + after;
+            const caret = (before + '@' + r.obj.username + ' ').length;
+            input.focus();
+            input.setSelectionRange(caret, caret);
+            hideMentionSuggestions();
+        };
+        box.appendChild(row);
+    });
+    box.classList.remove('hidden');
 }
 
 function initials(name) {
@@ -365,7 +511,7 @@ function teardownSession() {
     myChatIds = new Set();
     currentChat = null;
     messageCache = {};
-    lastMessagePreviews = {};
+    renderedMsgIds = {};
     lastMessageTimes = {};
     unreadCounts = {};
 }
@@ -385,6 +531,16 @@ async function logout() {
     });
 }
 
+// A single hardcoded account gets a TikTok-style verification checkmark
+// next to its name everywhere. Tagged once (client-side, on that
+// account's own login) by writing verified:true to its own user doc, so
+// every other client just reads it like any other profile field.
+const VERIFIED_EMAIL = 'kreys.tt.tt@gmail.com';
+const VERIFIED_BADGE_HTML = '<i class="fas fa-check-circle verified-badge" title="Подтверждённый аккаунт"></i>';
+function verifiedBadge(isVerified) {
+    return isVerified ? ' ' + VERIFIED_BADGE_HTML : '';
+}
+
 async function loadProfile() {
     const doc = await db.collection('users').doc(currentUser.uid).get();
     if (doc.exists) {
@@ -392,6 +548,10 @@ async function loadProfile() {
     } else {
         currentProfile = { id: currentUser.uid, displayName: currentUser.email.split('@')[0], username: '', bio: '', avatarUrl: '' };
         await db.collection('users').doc(currentUser.uid).set(currentProfile);
+    }
+    if (currentUser.email === VERIFIED_EMAIL && !currentProfile.verified) {
+        currentProfile.verified = true;
+        await db.collection('users').doc(currentUser.uid).update({ verified: true }).catch(() => {});
     }
     await db.collection('users').doc(currentUser.uid).update({
         lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
@@ -505,6 +665,7 @@ function buildMainUI() {
             </div>
             <div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
             <div class="input-container" id="inputContainer">
+                <div class="mention-suggestions hidden" id="mentionSuggestions"></div>
                 <div class="reply-bar hidden" id="replyBar"><div class="reply-preview" id="replyPreview"></div><span class="reply-close" id="replyClose">✕</span></div>
                 <div class="input-row" id="inputRow">
                     <button class="icon-button" id="attachBtn"><i class="fas fa-paperclip"></i></button>
@@ -645,7 +806,7 @@ function renderOwnProfile() {
         '<div class="tg-cover-avatar-edit" id="avEditBtn"><i class="fas fa-camera"></i></div>' +
         '</div>' +
         '<div class="tg-cover-info">' +
-        '<div class="tg-cover-name">' + (p.displayName || 'Пользователь') + '</div>' +
+        '<div class="tg-cover-name">' + (p.displayName || 'Пользователь') + verifiedBadge(p.verified) + '</div>' +
         '<div class="tg-cover-sub">' + (p.username ? '@' + p.username : '') + '</div>' +
         '</div>' +
         '</div>' +
@@ -672,8 +833,7 @@ function renderOwnProfile() {
             return showCustomAlert('Username может содержать только латинские буквы, цифры, точки и подчёркивания');
         }
         if (un && un !== (currentProfile.username || '')) {
-            const snap = await db.collection('users').where('username', '==', un).get();
-            if (snap.docs.some(d => d.id !== currentUser.uid)) return showCustomAlert('Username занят');
+            if (await isUsernameTaken(un, { excludeUserId: currentUser.uid })) return showCustomAlert('Username занят');
         }
 
         const data = {
@@ -949,7 +1109,7 @@ function renderChatList() {
         div.innerHTML =
             '<div class="avatar-wrap"><div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' + (online ? '<span class="online-dot"></span>' : '') + '</div>' +
             '<div class="chat-info">' +
-            '<div class="chat-name">' + name + badge + '</div>' +
+            '<div class="chat-name">' + name + (isGroup ? '' : verifiedBadge(meta.verified)) + badge + '</div>' +
             '<div class="chat-preview">' + preview + '</div>' +
             '</div>' +
             '<div class="chat-meta">' +
@@ -1330,6 +1490,24 @@ function openPostComments(msg, cid) {
         '</div>';
     document.body.appendChild(overlay);
 
+    // Same fix as the story composer overlay: this is appended straight to
+    // <body>, outside #app, so it doesn't get the app-wide viewport-fix
+    // resize. Left at position:fixed + inset:0, iOS/Android often don't
+    // shrink the *layout* viewport when the keyboard opens, so the input
+    // row stayed pinned below the real keyboard and the browser scrolled
+    // the whole page up trying to bring the focused textarea into view.
+    // Resizing the overlay itself to the *visual* viewport fixes both.
+    const vv = window.visualViewport;
+    function fitCommentsToViewport() {
+        overlay.style.height = vv.height + 'px';
+        window.scrollTo(0, 0);
+    }
+    if (vv) {
+        vv.addEventListener('resize', fitCommentsToViewport);
+        vv.addEventListener('scroll', fitCommentsToViewport);
+        fitCommentsToViewport();
+    }
+
     const chMeta = allChats[cid] || {};
     const previewEl = overlay.querySelector('#cmPostPreview');
     const previewAvatar = document.createElement('div');
@@ -1350,6 +1528,10 @@ function openPostComments(msg, cid) {
 
     const close = () => {
         if (unsubscribeComments) { unsubscribeComments(); unsubscribeComments = null; }
+        if (vv) {
+            vv.removeEventListener('resize', fitCommentsToViewport);
+            vv.removeEventListener('scroll', fitCommentsToViewport);
+        }
         overlay.remove();
     };
     overlay.querySelector('#cmClose').onclick = close;
@@ -1415,10 +1597,10 @@ function renderComments(listEl, items) {
         body.className = 'comment-body';
         const nameEl = document.createElement('div');
         nameEl.className = 'comment-name';
-        nameEl.textContent = u ? (u.displayName || 'Пользователь') : 'Пользователь';
+        nameEl.innerHTML = (u ? (u.displayName || 'Пользователь') : 'Пользователь') + (u ? verifiedBadge(u.verified) : '');
         const textEl = document.createElement('div');
         textEl.className = 'comment-text';
-        textEl.textContent = c.text || '';
+        textEl.appendChild(renderTextWithMentions(c.text || ''));
         body.appendChild(nameEl);
         body.appendChild(textEl);
         row.appendChild(av);
@@ -1478,7 +1660,7 @@ function renderChatHeader(id) {
     if (!meta) return;
     const name = isGroup ? (meta.name || 'Чат') : (meta.displayName || 'Пользователь');
     $('#msgAv').innerHTML = meta.avatarUrl ? '<img src="' + meta.avatarUrl + '" style="width:100%;height:100%;object-fit:cover;">' : initials(name);
-    $('#msgName').textContent = name;
+    $('#msgName').innerHTML = name + (isGroup ? '' : verifiedBadge(meta.verified));
 
     const info = $('#msgInfo');
     const av = $('#msgAv');
@@ -1579,9 +1761,10 @@ function renderFromCache(cid) {
         // consecutive posts group together even when different admins
         // wrote them — only the sender's own userId matters elsewhere.
         const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== msg.userId);
-        appendMsg(msg, dt, area, cid, groupChat, showAvatar, isChannel);
+        appendMsg(msg, dt, area, cid, groupChat, showAvatar, isChannel, false);
     });
     area.scrollTop = 999999;
+    renderedMsgIds[cid] = new Set(msgs.map(m => m.id));
 }
 
 // ==================== SUBSCRIBE (foreground: the chat that's open) ====================
@@ -1615,6 +1798,7 @@ function renderMessagesSnapshot(snap, cid) {
     const chatMeta = allChats[currentChat];
     const isChannel = !!(chatMeta && chatMeta.type === 'channel');
     const groupChat = isChannel || currentChat === GENERAL_CHAT_ID || (chatMeta && chatMeta.type === 'group');
+    const prevIds = renderedMsgIds[cid] || new Set();
     let lastDate = null;
     msgs.forEach((msg, idx) => {
         const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
@@ -1628,8 +1812,9 @@ function renderMessagesSnapshot(snap, cid) {
         }
         const nextMsg = msgs[idx + 1];
         const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== msg.userId);
-        appendMsg(msg, dt, area, cid, groupChat, showAvatar, isChannel);
+        appendMsg(msg, dt, area, cid, groupChat, showAvatar, isChannel, !prevIds.has(msg.id));
     });
+    renderedMsgIds[cid] = new Set(msgs.map(m => m.id));
     area.scrollTop = 999999;
 
     const id = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
@@ -1722,13 +1907,18 @@ function handleIncomingChanges(changes) {
 }
 
 // ==================== APPEND MSG ====================
-function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel) {
+function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel, isNew) {
     // Channel posts are authored "by the channel", not by whichever admin
     // hit send — so even the admin who posted it sees it as an incoming
     // message from the channel, exactly like every other subscriber does.
     const isMine = isChannel ? false : (m.userId === currentUser.uid);
     const wrapper = document.createElement('div');
-    wrapper.className = 'msg-wrap ' + (isMine ? 'sent' : 'received');
+    // The whole chat gets fully re-rendered on every snapshot (simplest way
+    // to stay in sync), so the appear animation must be opt-in per bubble —
+    // otherwise every message would replay it on every unrelated new
+    // message. isNew is only true for ids that weren't in the previous
+    // render pass (see renderedMsgIds in renderMessagesSnapshot).
+    wrapper.className = 'msg-wrap ' + (isMine ? 'sent' : 'received') + (isNew ? ' msg-appear' : '');
     wrapper.id = 'msg-' + m.id;
     wrapper.style.position = 'relative';
 
@@ -1853,7 +2043,7 @@ function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel) {
         row.style.justifyContent = 'space-between';
 
         const txt = document.createElement('span');
-        txt.textContent = m.text;
+        txt.appendChild(renderTextWithMentions(m.text));
         txt.style.flex = '1';
         txt.style.minWidth = '0';
         row.appendChild(txt);
@@ -1944,6 +2134,19 @@ function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel) {
 }
 
 // ==================== MESSAGE MENU ====================
+// A much bigger reaction set than before ("оч много реакций"), grouped
+// roughly by theme. The picker only shows the first row by default and
+// expands/collapses the rest — see .mcm-reactions / .expanded in CSS.
+const ALL_REACTIONS = [
+    '👍', '👎', '❤️', '🔥', '🥰', '😍', '😂', '🤣',
+    '😊', '🙂', '😉', '😅', '😭', '😢', '😡', '🤬',
+    '😱', '😮', '😯', '🤔', '🧐', '😴', '🤤', '😜',
+    '😎', '🥳', '🎉', '🎊', '👏', '🙏', '🤝', '💪',
+    '✌️', '🤞', '🤟', '👌', '💯', '💔', '💕', '💞',
+    '🥺', '🤯', '😳', '🙄', '😏', '😒', '🤡', '💀',
+    '👀', '🍾', '🌚', '🤝‍', '⚡', '✨', '💩', '🤮'
+];
+
 function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
     document.querySelectorAll('.msg-context-menu').forEach(m => m.remove());
 
@@ -1955,7 +2158,7 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
     menu.className = 'msg-context-menu';
 
     const rect = wrapper.getBoundingClientRect();
-    if (rect.top < 250) {
+    if (rect.top < 320) {
         menu.style.top = '100%';
         menu.style.bottom = 'auto';
         menu.style.marginTop = '5px';
@@ -1972,31 +2175,13 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
         menu.style.right = 'auto';
     }
 
-    const replyBtn = document.createElement('button');
-    replyBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--text);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
-    replyBtn.innerHTML = '<i class="fas fa-reply"></i> Ответить';
-    replyBtn.onclick = function (e) {
-        e.stopPropagation();
-        const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[msg.userId]?.displayName || 'Пользователь'));
-        setReply(msg.id, msg.text, senderName);
-        menu.remove();
-    };
-    menu.appendChild(replyBtn);
+    // --- Reactions: one row visible, "..." expands the rest ---
+    const reactionsWrap = document.createElement('div');
+    reactionsWrap.className = 'mcm-reactions-wrap';
 
-    const forwardBtn = document.createElement('button');
-    forwardBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--text);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
-    forwardBtn.innerHTML = '<i class="fas fa-share"></i> Переслать';
-    forwardBtn.onclick = function (e) {
-        e.stopPropagation();
-        openForwardPicker(msg, isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (allUsers[msg.userId] ? allUsers[msg.userId].displayName : 'Пользователь'));
-        menu.remove();
-    };
-    menu.appendChild(forwardBtn);
-
-    const reactions = ['👍', '❤️', '😂', '😮', '😡', '🔥', '👏', '🎉', '💯', '😍', '🤔', '🙏'];
-    const reactionRow = document.createElement('div');
-    reactionRow.style.cssText = 'display:flex;gap:4px;padding:8px 14px;flex-wrap:wrap;';
-    reactions.forEach(emoji => {
+    const reactionsGrid = document.createElement('div');
+    reactionsGrid.className = 'mcm-reactions';
+    ALL_REACTIONS.forEach(emoji => {
         const emojiBtn = document.createElement('span');
         emojiBtn.className = 'reaction-emoji-btn';
         emojiBtn.textContent = emoji;
@@ -2005,28 +2190,55 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
             toggleReaction(msg, emoji);
             menu.remove();
         };
-        reactionRow.appendChild(emojiBtn);
+        reactionsGrid.appendChild(emojiBtn);
     });
-    menu.appendChild(reactionRow);
+    reactionsWrap.appendChild(reactionsGrid);
 
-    if (canPin) {
-        const pinBtn = document.createElement('button');
-        pinBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--text);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
-        pinBtn.innerHTML = isPinned ? '<i class="fas fa-thumbtack"></i> Открепить' : '<i class="fas fa-thumbtack"></i> Закрепить';
-        pinBtn.onclick = function (e) {
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'mcm-reaction-toggle';
+    toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+    toggleBtn.onclick = function (e) {
+        e.stopPropagation();
+        const expanded = reactionsGrid.classList.toggle('expanded');
+        toggleBtn.innerHTML = expanded ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+    };
+    reactionsWrap.appendChild(toggleBtn);
+    menu.appendChild(reactionsWrap);
+
+    // --- Actions: compact icon-only row ---
+    const actions = document.createElement('div');
+    actions.className = 'mcm-actions';
+
+    const makeActionBtn = (icon, label, onClick, danger) => {
+        const btn = document.createElement('button');
+        btn.className = 'mcm-action-btn' + (danger ? ' danger' : '');
+        btn.title = label;
+        btn.innerHTML = '<i class="fas ' + icon + '"></i><span>' + label + '</span>';
+        btn.onclick = function (e) {
             e.stopPropagation();
-            togglePinMessage(msg, cid);
+            onClick();
             menu.remove();
         };
-        menu.appendChild(pinBtn);
+        return btn;
+    };
+
+    actions.appendChild(makeActionBtn('fa-reply', 'Ответить', () => {
+        const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[msg.userId]?.displayName || 'Пользователь'));
+        setReply(msg.id, msg.text, senderName);
+    }));
+
+    actions.appendChild(makeActionBtn('fa-share', 'Переслать', () => {
+        openForwardPicker(msg, isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (allUsers[msg.userId] ? allUsers[msg.userId].displayName : 'Пользователь'));
+    }));
+
+    if (canPin) {
+        actions.appendChild(makeActionBtn('fa-thumbtack', isPinned ? 'Открепить' : 'Закрепить', () => {
+            togglePinMessage(msg, cid);
+        }));
     }
 
     if (canDelete) {
-        const deleteBtn = document.createElement('button');
-        deleteBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--danger);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
-        deleteBtn.innerHTML = '<i class="fas fa-trash"></i> Удалить';
-        deleteBtn.onclick = async function (e) {
-            e.stopPropagation();
+        actions.appendChild(makeActionBtn('fa-trash', 'Удалить', () => {
             showCustomConfirm('Удалить сообщение?', async function () {
                 await db.collection('messages').doc(msg.id).delete();
                 if (currentPinnedIds.has(msg.id)) {
@@ -2039,10 +2251,10 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
                 wrapper.style.transition = '0.2s';
                 setTimeout(() => wrapper.remove(), 200);
             });
-            menu.remove();
-        };
-        menu.appendChild(deleteBtn);
+        }, true));
     }
+
+    menu.appendChild(actions);
 
     wrapper.appendChild(menu);
 
@@ -2617,7 +2829,7 @@ function viewUserProfile(uid, returnScreen) {
         '<div class="tg-cover' + (user.coverUrl ? ' has-photo' : '') + '"' + (user.coverUrl ? ' style="background-image:url(\'' + user.coverUrl + '\')"' : '') + '>' +
         '<div class="avatar">' + (user.avatarUrl ? '<img src="' + user.avatarUrl + '" style="width:100%;height:100%;object-fit:cover;">' : initials(user.displayName)) + '</div>' +
         '<div class="tg-cover-info">' +
-        '<div class="tg-cover-name">' + (user.displayName || 'Пользователь') + '</div>' +
+        '<div class="tg-cover-name">' + (user.displayName || 'Пользователь') + verifiedBadge(user.verified) + '</div>' +
         '<div class="tg-cover-sub" id="vpStatus">' + statusText() + '</div>' +
         '</div>' +
         '</div>' +
@@ -2867,8 +3079,7 @@ function showCreateChatFlow(type) {
             if (!state.name) return showCustomAlert('Введите название');
             if (state.username) {
                 if (!/^[a-zA-Z0-9_]+$/.test(state.username)) return showCustomAlert('Username: только латинские буквы, цифры и подчёркивания');
-                const existing = await db.collection('chats').where('username', '==', state.username).get();
-                if (!existing.empty) return showCustomAlert('Этот username уже занят');
+                if (await isUsernameTaken(state.username, {})) return showCustomAlert('Этот username уже занят');
             }
             if (type === 'group') renderStep2();
             else createChat();
@@ -3068,8 +3279,7 @@ function showChatInfo(id) {
                 if (!name) return showCustomAlert('Введите название');
                 if (username && !/^[a-zA-Z0-9_]+$/.test(username)) return showCustomAlert('Username: только латинские буквы, цифры и подчёркивания');
                 if (username && username !== meta.username) {
-                    const existing = await db.collection('chats').where('username', '==', username).get();
-                    if (existing.docs.some(d => d.id !== id)) return showCustomAlert('Этот username уже занят');
+                    if (await isUsernameTaken(username, { excludeChatId: id })) return showCustomAlert('Этот username уже занят');
                 }
                 await db.collection('chats').doc(id).update({ name, username: username || '' });
                 showCustomAlert('✅ Сохранено');
@@ -3298,7 +3508,11 @@ function setupListeners() {
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight, 100) + 'px';
             setTyping();
+            updateMentionSuggestions(this);
         };
+        input.addEventListener('keyup', () => updateMentionSuggestions(input));
+        input.addEventListener('click', () => updateMentionSuggestions(input));
+        input.addEventListener('blur', () => setTimeout(hideMentionSuggestions, 150));
     }
 
     const attachBtn = $('#attachBtn');
@@ -3484,7 +3698,7 @@ async function renderSearchResults(q, rawQuery) {
         div.innerHTML = `
             <div class="avatar">${user.avatarUrl ? '<img src="' + user.avatarUrl + '">' : initials(user.displayName)}</div>
             <div class="chat-info">
-                <div class="chat-name">${user.displayName || 'Пользователь'}</div>
+                <div class="chat-name">${user.displayName || 'Пользователь'}${verifiedBadge(user.verified)}</div>
                 ${user.username ? '<div style="font-size:12px;color:var(--primary);">@' + user.username + '</div>' : ''}
             </div>`;
         div.onclick = () => {
