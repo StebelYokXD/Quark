@@ -100,6 +100,133 @@ body {
     }
 }
 
+/* ==================== DESKTOP TWO-PANE LAYOUT ====================
+   Above DESKTOP_BREAKPOINT (script.js) the app stops behaving like a
+   single-screen phone view and switches to a Telegram-Desktop-style
+   layout: a slim icon rail, a chat list that's always visible, and the
+   open chat next to it. The underlying screen markup/logic is unchanged
+   (still one .screen per view) — this just repositions #screenChats and
+   #bottomNav and keeps #screenMessages visible by default instead of
+   only when "active", so the right pane isn't blank before a chat is
+   opened. */
+@media (min-width: 980px) {
+    .app {
+        max-width: calc(1320px * var(--ui-scale, 1));
+        max-height: none;
+        height: calc(100vh - 40px);
+    }
+
+    .main-content {
+        flex-direction: row;
+    }
+
+    #bottomNav {
+        order: -1;
+        flex-direction: column;
+        align-items: center;
+        width: calc(76px * var(--ui-scale, 1));
+        min-height: 0;
+        height: 100%;
+        flex-shrink: 0;
+        padding: calc(14px * var(--ui-scale, 1)) 0;
+        gap: calc(4px * var(--ui-scale, 1));
+        box-shadow: 1px 0 0 var(--glass-border);
+    }
+
+    /* On mobile, sub-screens (chat info, profile view, settings) hide the
+       bottom tab bar since it's a drill-down. On desktop the rail is
+       always visible instead — it's not tied to "how deep" you are. */
+    #bottomNav.hidden {
+        display: flex;
+    }
+
+    .nav-item {
+        flex: none;
+        width: calc(58px * var(--ui-scale, 1));
+        border-radius: calc(14px * var(--ui-scale, 1));
+        padding: calc(10px * var(--ui-scale, 1)) 0;
+    }
+
+    .nav-item.active {
+        background: var(--surface);
+    }
+
+    .nav-item::before {
+        display: none;
+    }
+
+    .desktop-scale-control {
+        display: flex;
+        margin-top: auto;
+    }
+
+    #screenChats {
+        display: flex;
+        flex: 0 0 calc(340px * var(--ui-scale, 1));
+        width: calc(340px * var(--ui-scale, 1));
+        max-width: calc(340px * var(--ui-scale, 1));
+        border-right: 1px solid var(--glass-border);
+    }
+
+    .screen:not(#screenChats) {
+        flex: 1;
+        min-width: 0;
+    }
+
+    /* Keep the chat pane showing its own empty state ("Выберите чат") by
+       default, rather than a blank gray gap, whenever none of the
+       full-pane overlay screens (settings/profile/chat-info) are open. */
+    .main-content:not(:has(#screenSettings.active)):not(:has(#screenProfile.active)):not(:has(#screenViewProfile.active)):not(:has(#screenChatInfo.active)) #screenMessages {
+        display: flex;
+    }
+
+    /* No need for a "back to chat list" button when the list is always
+       visible next to the chat. */
+    #backBtn {
+        display: none;
+    }
+}
+
+/* Hidden on mobile — becomes visible (flex) inside the desktop rail via
+   the media query above. */
+.desktop-scale-control {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(4px * var(--ui-scale, 1));
+    padding-bottom: calc(6px * var(--ui-scale, 1));
+}
+
+.scale-btn {
+    width: calc(30px * var(--ui-scale, 1));
+    height: calc(30px * var(--ui-scale, 1));
+    border-radius: 50%;
+    border: none;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: calc(11px * var(--ui-scale, 1));
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.scale-btn:hover {
+    background: var(--hover);
+    color: var(--primary);
+}
+
+.scale-btn:active {
+    transform: scale(0.9);
+}
+
+.scale-value {
+    font-size: calc(10px * var(--ui-scale, 1));
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
 .header {
     padding: calc(8px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
     background: var(--glass);

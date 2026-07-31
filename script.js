@@ -32,6 +32,15 @@ let selectedMessages = new Set();
 let selectionMode = false;
 let darkMode = localStorage.getItem('quark_dark') === '1';
 let fontSize = localStorage.getItem('quark_font') || 'medium';
+// Desktop two-pane layout (chat list + open chat side by side, like
+// Telegram Desktop) kicks in above this width; below it we keep the
+// single-screen mobile navigation. Interface scale on desktop is picked
+// independently from the mobile "font size" setting below, via the
+// zoom control in the desktop sidebar rail.
+const DESKTOP_BREAKPOINT = 980;
+const DESKTOP_SCALES = [0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6];
+let desktopScale = parseFloat(localStorage.getItem('quark_desktop_scale')) || 1.0;
+function isDesktopLayout() { return window.innerWidth >= DESKTOP_BREAKPOINT; }
 let soundEnabled = localStorage.getItem('quark_sound') !== 'false';
 let readReceiptsEnabled = localStorage.getItem('quark_read_receipts') !== 'false';
 let unsubscribeMessages = null;
@@ -140,10 +149,29 @@ function applyTheme() {
 }
 
 function applyFontSize() {
-    const scales = { small: '0.88', medium: '1.0', large: '1.18' };
-    document.documentElement.style.setProperty('--ui-scale', scales[fontSize] || '1.0');
     localStorage.setItem('quark_font', fontSize);
+    applyUiScale();
 }
+
+// Single source of truth for --ui-scale (used everywhere via calc(Npx *
+// var(--ui-scale,1))): on desktop it comes from the zoom control in the
+// sidebar rail, on mobile from the "font size" setting. Re-run on resize
+// so crossing the breakpoint immediately switches which one applies.
+function applyUiScale() {
+    const scales = { small: '0.88', medium: '1.0', large: '1.18' };
+    const scale = isDesktopLayout() ? desktopScale : parseFloat(scales[fontSize] || '1.0');
+    document.documentElement.style.setProperty('--ui-scale', scale);
+    const label = $('#scaleValueLabel');
+    if (label) label.textContent = Math.round(desktopScale * 100) + '%';
+}
+
+function applyDesktopScale(newScale) {
+    desktopScale = Math.max(DESKTOP_SCALES[0], Math.min(DESKTOP_SCALES[DESKTOP_SCALES.length - 1], newScale));
+    localStorage.setItem('quark_desktop_scale', desktopScale);
+    applyUiScale();
+}
+
+window.addEventListener('resize', applyUiScale);
 
 function playSound() {
     if (!soundEnabled) return;
@@ -562,7 +590,12 @@ function buildMainUI() {
     $('#bottomNav').innerHTML = `
         <button class="nav-item active" data-sc="screenChats"><span class="nav-icon-wrap"><i class="fas fa-comments"></i><span class="nav-badge hidden" id="navChatsBadge"></span></span><span>Чаты</span></button>
         <button class="nav-item" data-sc="screenProfile"><i class="fas fa-user"></i><span>Профиль</span></button>
-        <button class="nav-item" data-sc="screenSettings"><i class="fas fa-cog"></i><span>Настройки</span></button>`;
+        <button class="nav-item" data-sc="screenSettings"><i class="fas fa-cog"></i><span>Настройки</span></button>
+        <div class="desktop-scale-control" id="desktopScaleControl" title="Масштаб интерфейса">
+            <button class="scale-btn" id="scaleUpBtn"><i class="fas fa-plus"></i></button>
+            <span class="scale-value" id="scaleValueLabel">100%</span>
+            <button class="scale-btn" id="scaleDownBtn"><i class="fas fa-minus"></i></button>
+        </div>`;
 
     const menu = document.createElement('div');
     menu.className = 'attach-menu';
@@ -2760,7 +2793,7 @@ function showScreen(id) {
         // viewed" forever, so its unread badge and notification sound would
         // silently stop working after the first visit. Clearing it here
         // means only a chat that's genuinely on screen suppresses those.
-        if (currentChat !== null) {
+        if (currentChat !== null && !(isDesktopLayout() && id === 'screenChats')) {
             currentChat = null;
             renderChatList();
         }
@@ -3304,6 +3337,17 @@ function setupListeners() {
         applyFontSize();
         const fv = $('#fontValue');
         if (fv) fv.textContent = { small: 'Мелкий', medium: 'Средний', large: 'Крупный' }[fontSize];
+    };
+
+    const scaleUpBtn = $('#scaleUpBtn');
+    if (scaleUpBtn) scaleUpBtn.onclick = () => {
+        const i = DESKTOP_SCALES.indexOf(desktopScale);
+        applyDesktopScale(DESKTOP_SCALES[Math.min(DESKTOP_SCALES.length - 1, (i === -1 ? 2 : i) + 1)]);
+    };
+    const scaleDownBtn = $('#scaleDownBtn');
+    if (scaleDownBtn) scaleDownBtn.onclick = () => {
+        const i = DESKTOP_SCALES.indexOf(desktopScale);
+        applyDesktopScale(DESKTOP_SCALES[Math.max(0, (i === -1 ? 2 : i) - 1)]);
     };
 
     $('#soundRow').onclick = () => {
