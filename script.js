@@ -102,6 +102,17 @@ function formatTime(ts) {
     return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
+// A message that was just sent locally hasn't had its serverTimestamp()
+// resolved yet (Firestore delivers it as a pending write with a null
+// timestamp before the real one arrives) — new Date(null) would show it
+// as 1970. Falling back to "now" instead keeps it looking normal until
+// the follow-up "modified" event fills in the real timestamp.
+function msgDateOf(msg) {
+    if (msg.timestamp && msg.timestamp.toDate) return msg.timestamp.toDate();
+    if (msg.timestamp) return new Date(msg.timestamp);
+    return new Date();
+}
+
 function toMillis(value) {
     if (!value) return 0;
     return value.toDate ? value.toDate().getTime() : new Date(value).getTime();
@@ -1747,7 +1758,7 @@ function renderFromCache(cid) {
     const isChannel = !!(chatMeta && chatMeta.type === 'channel');
     const groupChat = isChannel || (isGroupLike(currentChat) && currentChat !== GENERAL_CHAT_ID ? (chatMeta && chatMeta.type === 'group') : (currentChat === GENERAL_CHAT_ID));
     msgs.forEach((msg, idx) => {
-        const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
+        const dt = msgDateOf(msg);
         const ds = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
         if (ds !== lastDate) {
             const dv = document.createElement('div');
@@ -1772,14 +1783,133 @@ function subscribe(cid) {
     if (unsubscribeMessages) unsubscribeMessages();
     if (!isGroupLike(currentChat)) watchTyping(cid);
 
+    // The very first snapshot after opening a chat still does a full
+    // build (renderMessagesSnapshot) — simplest way to lay out the whole
+    // history correctly. Every snapshot after that is a real diff against
+    // what's already on screen (a new message, a reaction, a read
+    // receipt, a delete), so it's applied incrementally instead of
+    // wiping and rebuilding the entire message list — that full-rebuild
+    // was exactly what made the chat flash/flicker on every send: the
+    // optimistic local write and the server-confirmed write each
+    // triggered their own full teardown+rebuild of every bubble.
+    let firstSnap = true;
     unsubscribeMessages = db.collection('messages').where('chatId', '==', cid).orderBy('timestamp', 'asc').limit(200).onSnapshot(snap => {
-        renderMessagesSnapshot(snap, cid);
+        if (firstSnap) {
+            firstSnap = false;
+            renderMessagesSnapshot(snap, cid);
+        } else {
+            applyMessageChanges(snap.docChanges(), cid);
+        }
     }, err => {
         unsubscribeMessages = db.collection('messages').orderBy('timestamp', 'asc').limit(400).onSnapshot(snap2 => {
             const filtered = { docs: snap2.docs.filter(d => d.data().chatId === cid), forEach(fn) { this.docs.forEach(fn); } };
             renderMessagesSnapshot(filtered, cid);
         });
     });
+}
+
+// Applies added/modified/removed message changes onto the already-
+// rendered chat without touching any bubble that didn't actually change.
+function applyMessageChanges(changes, cid) {
+    const msgs = messageCache[cid] || [];
+    const area = (currentChat !== null && chatIdFor(currentChat) === cid) ? $('#msgArea') : null;
+
+    const chatMeta = allChats[currentChat];
+    const isChannel = !!(chatMeta && chatMeta.type === 'channel');
+    const groupChat = isChannel || currentChat === GENERAL_CHAT_ID || (chatMeta && chatMeta.type === 'group');
+
+    let tailMsg = msgs.length ? msgs[msgs.length - 1] : null;
+    let tailDateStr = tailMsg ? msgDateOf(tailMsg).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : null;
+
+    if (area && !msgs.length) area.innerHTML = '';
+
+    changes.forEach(change => {
+        const id = change.doc.id;
+        const data = { id, ...change.doc.data() };
+        const idx = msgs.findIndex(x => x.id === id);
+
+        if (change.type === 'removed') {
+            if (idx > -1) msgs.splice(idx, 1);
+            if (renderedMsgIds[cid]) renderedMsgIds[cid].delete(id);
+            if (area) {
+                const el = document.getElementById('msg-' + id);
+                if (el) el.remove();
+            }
+            if (tailMsg && tailMsg.id === id) tailMsg = msgs.length ? msgs[msgs.length - 1] : null;
+            return;
+        }
+
+        if (change.type === 'modified') {
+            if (idx > -1) msgs[idx] = data; else msgs.push(data);
+            if (area) {
+                const pos = msgs.findIndex(x => x.id === id);
+                const nextMsg = msgs[pos + 1];
+                const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
+                const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
+                const el = document.getElementById('msg-' + id);
+                if (el) el.replaceWith(fresh); else area.appendChild(fresh);
+            }
+            if (tailMsg && tailMsg.id === id) tailMsg = data;
+            return;
+        }
+
+        // added
+        if (idx > -1) { msgs[idx] = data; return; }
+        msgs.push(data);
+        if (!area) return;
+
+        const dt = msgDateOf(data);
+        const ds = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+        if (ds !== tailDateStr) {
+            const dv = document.createElement('div');
+            dv.className = 'date-divider';
+            dv.textContent = ds;
+            area.appendChild(dv);
+            tailDateStr = ds;
+        }
+
+        // This new message is now the last one, so it always shows its own
+        // avatar slot — but if the previous last message continues the
+        // same "run" (same sender in a group chat, or any post in a
+        // channel, since those all share the channel's identity), that
+        // one is no longer the last of its run, so hide its avatar now
+        // that this message takes over that spot. A no-op if that
+        // previous bubble never had an avatar to begin with (e.g. it was
+        // your own message in a non-channel chat).
+        if (tailMsg && groupChat && (isChannel || tailMsg.userId === data.userId)) {
+            const prevAv = document.querySelector('#msg-' + tailMsg.id + ' .msg-avatar');
+            if (prevAv && !prevAv.classList.contains('msg-avatar-hidden')) {
+                prevAv.classList.add('msg-avatar-hidden');
+                prevAv.innerHTML = '';
+                prevAv.style.cursor = '';
+                prevAv.onclick = null;
+            }
+        }
+
+        area.appendChild(buildMsgWrapper(data, dt, cid, groupChat, true, isChannel, true));
+        if (renderedMsgIds[cid]) renderedMsgIds[cid].add(id); else renderedMsgIds[cid] = new Set([id]);
+        tailMsg = data;
+    });
+
+    messageCache[cid] = msgs;
+
+    if (area) {
+        if (!msgs.length) {
+            area.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Нет сообщений</p></div>';
+        } else {
+            area.scrollTop = 999999;
+            markRead(cid);
+        }
+    }
+
+    const chatKeyId = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
+    if (chatKeyId && msgs.length > 0) {
+        const last = msgs[msgs.length - 1];
+        lastMessagePreviews[chatKeyId] = last.imageUrl ? '<i class="fas fa-image"></i> Фото' : (last.text || '').substring(0, 30);
+        const ts = last.timestamp && last.timestamp.toDate ? last.timestamp.toDate() : null;
+        if (ts) lastMessageTimes[chatKeyId] = ts.getTime();
+        renderChatList();
+    }
 }
 
 function renderMessagesSnapshot(snap, cid) {
@@ -1801,7 +1931,7 @@ function renderMessagesSnapshot(snap, cid) {
     const prevIds = renderedMsgIds[cid] || new Set();
     let lastDate = null;
     msgs.forEach((msg, idx) => {
-        const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
+        const dt = msgDateOf(msg);
         const ds = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
         if (ds !== lastDate) {
             const dv = document.createElement('div');
@@ -1908,6 +2038,10 @@ function handleIncomingChanges(changes) {
 
 // ==================== APPEND MSG ====================
 function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel, isNew) {
+    area.appendChild(buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew));
+}
+
+function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     // Channel posts are authored "by the channel", not by whichever admin
     // hit send — so even the admin who posted it sees it as an incoming
     // message from the channel, exactly like every other subscriber does.
@@ -2130,7 +2264,7 @@ function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel, isNew) {
 
     wrapper.appendChild(bubbleCol);
 
-    area.appendChild(wrapper);
+    return wrapper;
 }
 
 // ==================== MESSAGE MENU ====================
