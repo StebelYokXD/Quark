@@ -1769,33 +1769,57 @@ body {
 }
 
 /* ==================== STORIES ==================== */
+/* The blur used to live directly on the scrolling element itself, which
+   forced the browser to recompute backdrop-filter on every horizontal
+   scroll frame (any repaint inside a backdrop-filter element invalidates
+   its blur too) — that's what made the tray feel laggy. Splitting it into
+   a static, non-scrolling background layer + a plain scroll layer on top
+   means the blur is computed once and the actual scrolling content has no
+   expensive filters, so it can scroll on the compositor alone. */
 .stories-row {
-    display: flex;
-    gap: calc(14px * var(--ui-scale, 1));
-    padding: calc(10px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
-    overflow-x: auto;
-    overflow-y: hidden;
+    position: relative;
     flex-shrink: 0;
-    background: var(--glass);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 1px 0 var(--glass-border);
+    overflow: hidden;
     max-height: calc(94px * var(--ui-scale, 1));
-    transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.18s ease;
+    transition: max-height 0.22s ease, opacity 0.18s ease;
 }
 
 /* Collapsed when the chat list below is scrolled down, like Telegram
    tucking the stories tray away as you browse the chat list. */
 .stories-row.stories-hidden {
     max-height: 0;
-    padding-top: 0;
-    padding-bottom: 0;
     opacity: 0;
-    overflow: hidden;
+}
+
+.stories-row-bg {
+    position: absolute;
+    inset: 0;
+    background: var(--glass);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 1px 0 var(--glass-border);
+}
+
+.stories-row.stories-hidden .stories-row-bg {
     box-shadow: none;
 }
 
-.stories-row::-webkit-scrollbar {
+.stories-row-content {
+    position: relative;
+    display: flex;
+    gap: calc(14px * var(--ui-scale, 1));
+    padding: calc(10px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    overflow-x: auto;
+    overflow-y: hidden;
+    height: 100%;
+    -webkit-overflow-scrolling: touch;
+    /* Promote to its own compositor layer so scrolling doesn't force a
+       repaint of anything else in the header. */
+    will-change: transform;
+    transform: translateZ(0);
+}
+
+.stories-row-content::-webkit-scrollbar {
     display: none;
 }
 
@@ -1991,6 +2015,22 @@ body {
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 12px rgba(0, 0, 0, 0.4);
     z-index: 2;
     word-break: break-word;
+    pointer-events: none;
+}
+
+/* Text-shadow alone isn't enough over busy/bright photos, so this adds a
+   soft dark scrim behind the caption — negative z-index keeps it behind
+   the text itself but still above the photo (its parent's z-index:2
+   already puts the whole block above the image). */
+.story-caption::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(-40px * var(--ui-scale, 1));
+    bottom: calc(-90px * var(--ui-scale, 1));
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.55) 45%, rgba(0, 0, 0, 0.6) 100%);
+    z-index: -1;
     pointer-events: none;
 }
 

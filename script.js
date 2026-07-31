@@ -423,7 +423,10 @@ function buildMainUI() {
             <div class="header">
                 <span style="font-weight:700;font-size:19px;color:var(--text);">Quark</span>
             </div>
-            <div class="stories-row" id="storiesRow"></div>
+            <div class="stories-row" id="storiesRow">
+                <div class="stories-row-bg"></div>
+                <div class="stories-row-content" id="storiesRowContent"></div>
+            </div>
             <div class="chat-scroll">
                 <div class="search-box">
                     <div class="search-wrapper"><i class="fas fa-search"></i><input type="text" class="search-input" id="searchInput" placeholder="Поиск людей, групп, каналов..."></div>
@@ -881,8 +884,6 @@ function renderChatList() {
 
         let badge = '';
         if (id === GENERAL_CHAT_ID) badge = '<span class="chat-badge">общий</span>';
-        else if (meta.type === 'channel') badge = '<span class="chat-badge">канал</span>';
-        else if (meta.type === 'group') badge = '<span class="chat-badge">группа</span>';
 
         const online = !isGroup && isUserOnline(meta) && canShowLastSeen(meta);
 
@@ -942,7 +943,7 @@ function watchStories() {
 }
 
 function renderStoriesRow() {
-    const row = $('#storiesRow');
+    const row = $('#storiesRowContent');
     if (!row || !currentUser) return;
     row.innerHTML = '';
 
@@ -985,27 +986,55 @@ function triggerStoryUpload() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
+    input.multiple = true;
     input.onchange = async () => {
-        const file = input.files[0];
-        if (!file) return;
-        try {
-            const compressed = await compressFile(file);
-            openStoryComposer(compressed.dataUrl);
-        } catch (e) {
-            showCustomAlert('Не удалось загрузить историю');
-        }
+        const files = Array.from(input.files || []);
+        if (files.length) openStoryQueue(files);
     };
     input.click();
 }
 
+// Reads a file as-is, with no resizing or recompression — unlike
+// compressFile() used elsewhere in the app, on explicit request to keep
+// full photo quality for stories. Note: the image still ends up stored
+// as a base64 imageUrl directly on the Firestore story document, which
+// has a 1MB-per-document limit, so a full-resolution phone photo can
+// fail to upload where a compressed one wouldn't.
+function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+// Lets you pick several photos in one go and walks through them one at a
+// time — each gets its own caption composer, and sending one advances to
+// the next automatically, so a multi-photo pick becomes several stories
+// (closing a composer early stops the queue instead of skipping ahead).
+async function openStoryQueue(files, idx) {
+    idx = idx || 0;
+    if (idx >= files.length) return;
+    let dataUrl;
+    try {
+        dataUrl = await readFileAsDataUrl(files[idx]);
+    } catch (e) {
+        showCustomAlert('Не удалось загрузить историю');
+        return;
+    }
+    const progress = files.length > 1 ? { current: idx + 1, total: files.length } : null;
+    openStoryComposer(dataUrl, progress, () => openStoryQueue(files, idx + 1));
+}
+
 // Pre-publish preview: lets you write a caption over the picked image
 // before it goes out, like Telegram's story composer.
-function openStoryComposer(dataUrl) {
+function openStoryComposer(dataUrl, progress, onDone) {
     const overlay = document.createElement('div');
     overlay.className = 'story-viewer-overlay story-composer-overlay';
     overlay.innerHTML =
         '<div class="story-viewer-header">' +
-        '<span class="story-viewer-name">Новая история</span>' +
+        '<span class="story-viewer-name">Новая история' + (progress ? ' (' + progress.current + '/' + progress.total + ')' : '') + '</span>' +
         '<span class="story-viewer-close" id="scClose"><i class="fas fa-times"></i></span>' +
         '</div>' +
         '<img class="story-viewer-img" src="' + dataUrl + '">' +
@@ -1015,7 +1044,33 @@ function openStoryComposer(dataUrl) {
         '</div>';
     document.body.appendChild(overlay);
 
-    const close = () => overlay.remove();
+    // This overlay is appended straight to <body>, outside #app, so the
+    // app-wide setupViewportFix() (which resizes #app to visualViewport's
+    // height) never reaches it. Left alone, position:fixed + inset:0 sizes
+    // this to the *layout* viewport, which iOS/Android often don't shrink
+    // when the keyboard opens — so the caption bar stayed pinned to the
+    // bottom of that full height, leaving a gap above the real keyboard,
+    // and the browser scrolled the page trying to bring the input into
+    // view. Resizing the overlay itself to visualViewport's height fixes
+    // both.
+    const vv = window.visualViewport;
+    function fitToViewport() {
+        overlay.style.height = vv.height + 'px';
+        window.scrollTo(0, 0);
+    }
+    if (vv) {
+        vv.addEventListener('resize', fitToViewport);
+        vv.addEventListener('scroll', fitToViewport);
+        fitToViewport();
+    }
+
+    const close = () => {
+        if (vv) {
+            vv.removeEventListener('resize', fitToViewport);
+            vv.removeEventListener('scroll', fitToViewport);
+        }
+        overlay.remove();
+    };
     overlay.querySelector('#scClose').onclick = close;
 
     const input = overlay.querySelector('#scCaptionInput');
@@ -1032,6 +1087,7 @@ function openStoryComposer(dataUrl) {
                 viewedBy: []
             });
             close();
+            if (onDone) onDone();
         } catch (e) {
             sendBtn.disabled = false;
             showCustomAlert('Не удалось загрузить историю');
@@ -1252,9 +1308,12 @@ function renderChatHeader(id) {
     if (av) av.onclick = () => (isGroup ? showChatInfo(id) : viewUserProfile(id));
 }
 
-// Hides the composer for channels where the current user isn't an admin
-// (only admins may post in a channel, like Telegram) and offers an
-// Unsubscribe button in its place instead of just a locked note.
+// Hides the composer for channels where the current user can't post —
+// either because they're not an admin, or because they're just browsing
+// the channel without having subscribed yet (e.g. opened via a profile's
+// featured-channel card or search, which lands here without joining
+// first). Offers the matching action button in the composer's place
+// instead of just a locked note.
 function updateComposerAvailability(id) {
     const row = $('#inputRow');
     const lockedNote = $('#channelLockedNote');
@@ -1262,33 +1321,55 @@ function updateComposerAvailability(id) {
     if (!row || !lockedNote) return;
 
     const meta = allChats[id];
-    const canPost = !(meta && meta.type === 'channel' && !(meta.admins || []).includes(currentUser.uid));
+    const isChannel = !!(meta && meta.type === 'channel');
+    const isMember = !isChannel || (meta.members || []).includes(currentUser.uid);
+    const isAdmin = isChannel && (meta.admins || []).includes(currentUser.uid);
+    const canPost = !isChannel || isAdmin;
 
     if (canPost) {
         row.classList.remove('hidden');
         lockedNote.classList.add('hidden');
         lockedNote.innerHTML = '';
-    } else {
-        row.classList.add('hidden');
-        lockedNote.classList.remove('hidden');
-        if (replyBar) replyBar.classList.add('hidden');
-        lockedNote.innerHTML = '<button class="btn btn-danger" id="channelUnsubBtn" style="width:auto;padding:9px 20px;margin:0;"><i class="fas fa-user-minus"></i> Отписаться от канала</button>';
-        const unsubBtn = $('#channelUnsubBtn');
-        if (unsubBtn) {
-            unsubBtn.onclick = () => {
-                showCustomConfirm('Отписаться от этого канала?', async () => {
-                    try {
-                        await db.collection('chats').doc(id).update({
-                            members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid),
-                            admins: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)
-                        });
-                    } catch (e) { console.error('Unsubscribe error:', e); }
-                    activeChats.delete(id);
-                    showScreen('screenChats');
-                    renderChatList();
-                });
+        return;
+    }
+
+    row.classList.add('hidden');
+    lockedNote.classList.remove('hidden');
+    if (replyBar) replyBar.classList.add('hidden');
+
+    if (!isMember) {
+        lockedNote.innerHTML = '<button class="btn btn-primary" id="channelJoinBtn" style="width:auto;padding:9px 20px;margin:0;"><i class="fas fa-bullhorn"></i> Подписаться на канал</button>';
+        const joinBtn = $('#channelJoinBtn');
+        if (joinBtn) {
+            joinBtn.onclick = async () => {
+                try {
+                    await db.collection('chats').doc(id).update({
+                        members: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)
+                    });
+                } catch (e) { console.error('Subscribe error:', e); }
+                updateComposerAvailability(id);
+                renderChatList();
             };
         }
+        return;
+    }
+
+    lockedNote.innerHTML = '<button class="btn btn-danger" id="channelUnsubBtn" style="width:auto;padding:9px 20px;margin:0;"><i class="fas fa-user-minus"></i> Отписаться от канала</button>';
+    const unsubBtn = $('#channelUnsubBtn');
+    if (unsubBtn) {
+        unsubBtn.onclick = () => {
+            showCustomConfirm('Отписаться от этого канала?', async () => {
+                try {
+                    await db.collection('chats').doc(id).update({
+                        members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid),
+                        admins: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)
+                    });
+                } catch (e) { console.error('Unsubscribe error:', e); }
+                activeChats.delete(id);
+                showScreen('screenChats');
+                renderChatList();
+            });
+        };
     }
 }
 
@@ -2965,11 +3046,10 @@ async function renderSearchResults(q, rawQuery) {
         if (!name.includes(q) && !uname.includes(q)) return;
         const div = document.createElement('div');
         div.className = 'chat-item';
-        const badge = chat.type === 'channel' ? '<span class="chat-badge">канал</span>' : '<span class="chat-badge">группа</span>';
         div.innerHTML = `
             <div class="avatar">${chat.avatarUrl ? '<img src="' + chat.avatarUrl + '">' : initials(chat.name)}</div>
             <div class="chat-info">
-                <div class="chat-name">${chat.name || 'Чат'} ${badge}</div>
+                <div class="chat-name">${chat.name || 'Чат'}</div>
                 ${chat.username ? '<div style="font-size:12px;color:var(--primary);">@' + chat.username + '</div>' : ''}
             </div>`;
         div.onclick = () => openChat(chat.id);
@@ -2985,12 +3065,11 @@ async function renderSearchResults(q, rawQuery) {
                 if (myChatIds.has(doc.id)) return;
                 const div = document.createElement('div');
                 div.className = 'chat-item';
-                const badge = chat.type === 'channel' ? 'Канал' : 'Группа';
                 div.innerHTML = `
                     <div class="avatar">${chat.avatarUrl ? '<img src="' + chat.avatarUrl + '">' : initials(chat.name)}</div>
                     <div class="chat-info">
                         <div class="chat-name">${chat.name || 'Чат'}</div>
-                        <div style="font-size:12px;color:var(--primary);">${badge} &middot; @${chat.username}</div>
+                        <div style="font-size:12px;color:var(--primary);">@${chat.username}</div>
                     </div>
                     <button class="btn btn-primary" style="width:auto;padding:8px 14px;font-size:13px;" id="joinBtn-${doc.id}">Вступить</button>`;
                 list.appendChild(div);
