@@ -39,6 +39,15 @@ let shouldScrollDown = true;
 let replyTo = null;
 let savedAccounts = JSON.parse(localStorage.getItem('quark_accounts') || '[]');
 
+// --- pinned messages (per chat, "chatMeta" collection keyed by chat id) ---
+let currentPinnedIds = new Set();   // ids of messages pinned in the currently open chat
+let currentPinnedList = [];         // ordered list of pinned message ids for the open chat
+let pinnedShownIndex = 0;           // which pinned message the banner currently shows
+let unsubscribePinned = null;
+
+// --- post comments (channel posts) ---
+let unsubscribeComments = null;
+
 // --- stories ---
 let storiesByUser = {};
 let unsubscribeStories = null;
@@ -309,6 +318,11 @@ function teardownSession() {
     if (unsubscribeChatMeta) { unsubscribeChatMeta(); unsubscribeChatMeta = null; }
     if (unsubscribeTyping) { unsubscribeTyping(); unsubscribeTyping = null; }
     if (unsubscribeStories) { unsubscribeStories(); unsubscribeStories = null; }
+    if (unsubscribePinned) { unsubscribePinned(); unsubscribePinned = null; }
+    if (unsubscribeComments) { unsubscribeComments(); unsubscribeComments = null; }
+    currentPinnedIds = new Set();
+    currentPinnedList = [];
+    pinnedShownIndex = 0;
     storiesByUser = {};
     stopHeartbeat();
     if (statusTickInterval) { clearInterval(statusTickInterval); statusTickInterval = null; }
@@ -445,6 +459,11 @@ function buildMainUI() {
                     <div class="chat-header-typing" id="msgTyping"></div>
                 </div>
                 <button class="icon-button" id="deleteSelectedBtn" style="display:none;color:var(--danger);"><i class="fas fa-trash"></i></button>
+            </div>
+            <div class="pinned-bar hidden" id="pinnedBar">
+                <i class="fas fa-thumbtack"></i>
+                <div class="pinned-bar-text" id="pinnedBarText"></div>
+                <span class="pinned-bar-close" id="pinnedBarClose"><i class="fas fa-times"></i></span>
             </div>
             <div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
             <div class="input-container" id="inputContainer">
@@ -1251,6 +1270,126 @@ function openStoryViewersList(story, onClose) {
     document.body.appendChild(overlay);
 }
 
+// ==================== POST COMMENTS (channels) ====================
+// Comments live in their own collection, keyed to the post by postId.
+// No orderBy in the query on purpose — combined with the postId equality
+// filter it would need a composite Firestore index this project doesn't
+// have (the same issue that broke shared media before), so comments are
+// fetched by postId alone and sorted client-side instead.
+function openPostComments(msg, cid) {
+    const overlay = document.createElement('div');
+    overlay.className = 'comments-overlay';
+    overlay.innerHTML =
+        '<div class="comments-header">' +
+        '<span class="comments-close" id="cmClose"><i class="fas fa-arrow-left"></i></span>' +
+        '<span class="comments-title">Комментарии</span>' +
+        '</div>' +
+        '<div class="comments-post-preview" id="cmPostPreview"></div>' +
+        '<div class="comments-list" id="cmList"></div>' +
+        '<div class="comments-input-row">' +
+        '<textarea class="comments-input" id="cmInput" placeholder="Написать комментарий..." rows="1"></textarea>' +
+        '<button class="comments-send-btn" id="cmSend"><i class="fas fa-paper-plane"></i></button>' +
+        '</div>';
+    document.body.appendChild(overlay);
+
+    const chMeta = allChats[cid] || {};
+    const previewEl = overlay.querySelector('#cmPostPreview');
+    const previewAvatar = document.createElement('div');
+    previewAvatar.className = 'avatar';
+    previewAvatar.innerHTML = chMeta.avatarUrl ? '<img src="' + chMeta.avatarUrl + '">' : initials(chMeta.name || 'Канал');
+    const previewBody = document.createElement('div');
+    previewBody.className = 'comments-post-body';
+    const previewName = document.createElement('div');
+    previewName.className = 'comments-post-name';
+    previewName.textContent = chMeta.name || 'Канал';
+    const previewText = document.createElement('div');
+    previewText.className = 'comments-post-text';
+    previewText.textContent = msg.text || (msg.imageUrl ? 'Фото' : '');
+    previewBody.appendChild(previewName);
+    previewBody.appendChild(previewText);
+    previewEl.appendChild(previewAvatar);
+    previewEl.appendChild(previewBody);
+
+    const close = () => {
+        if (unsubscribeComments) { unsubscribeComments(); unsubscribeComments = null; }
+        overlay.remove();
+    };
+    overlay.querySelector('#cmClose').onclick = close;
+
+    const listEl = overlay.querySelector('#cmList');
+    listEl.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Загрузка...</p></div>';
+
+    if (unsubscribeComments) unsubscribeComments();
+    unsubscribeComments = db.collection('comments').where('postId', '==', msg.id).onSnapshot(snap => {
+        const items = [];
+        snap.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+        items.sort((a, b) => toMillis(a.timestamp) - toMillis(b.timestamp));
+        renderComments(listEl, items);
+    }, () => {
+        listEl.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Не удалось загрузить</p></div>';
+    });
+
+    const input = overlay.querySelector('#cmInput');
+    const sendBtn = overlay.querySelector('#cmSend');
+    input.oninput = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 120) + 'px'; };
+    const send = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        sendBtn.disabled = true;
+        try {
+            await db.collection('comments').add({
+                postId: msg.id,
+                chatId: cid,
+                userId: currentUser.uid,
+                text: text,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            await db.collection('messages').doc(msg.id).update({
+                commentCount: firebase.firestore.FieldValue.increment(1)
+            });
+            input.value = '';
+            input.style.height = 'auto';
+        } catch (e) {
+            console.error('Comment error:', e);
+        }
+        sendBtn.disabled = false;
+    };
+    sendBtn.onclick = send;
+    input.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    };
+}
+
+function renderComments(listEl, items) {
+    listEl.innerHTML = '';
+    if (!items.length) {
+        listEl.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Пока нет комментариев</p></div>';
+        return;
+    }
+    items.forEach(c => {
+        const u = c.userId === currentUser.uid ? currentProfile : allUsers[c.userId];
+        const row = document.createElement('div');
+        row.className = 'comment-row';
+        const av = document.createElement('div');
+        av.className = 'avatar';
+        av.innerHTML = u && u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u ? u.displayName : '');
+        const body = document.createElement('div');
+        body.className = 'comment-body';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'comment-name';
+        nameEl.textContent = u ? (u.displayName || 'Пользователь') : 'Пользователь';
+        const textEl = document.createElement('div');
+        textEl.className = 'comment-text';
+        textEl.textContent = c.text || '';
+        body.appendChild(nameEl);
+        body.appendChild(textEl);
+        row.appendChild(av);
+        row.appendChild(body);
+        listEl.appendChild(row);
+    });
+    listEl.scrollTop = listEl.scrollHeight;
+}
+
 // ==================== OPEN CHAT ====================
 function openChat(id) {
     // Leaving the previous DM: stop announcing "typing" there and drop the
@@ -1281,6 +1420,7 @@ function openChat(id) {
     updateComposerAvailability(id);
 
     const cid = chatIdFor(id);
+    watchPinned(cid);
     if (messageCache[cid]) {
         renderFromCache(cid);
         setTimeout(() => { const area = $('#msgArea'); if (area) area.scrollTop = 999999; }, 200);
@@ -1383,7 +1523,9 @@ function renderFromCache(cid) {
         return;
     }
     let lastDate = null;
-    const groupChat = isGroupLike(currentChat) && currentChat !== GENERAL_CHAT_ID ? (allChats[currentChat] && allChats[currentChat].type === 'group') : (currentChat === GENERAL_CHAT_ID);
+    const chatMeta = allChats[currentChat];
+    const isChannel = !!(chatMeta && chatMeta.type === 'channel');
+    const groupChat = isChannel || (isGroupLike(currentChat) && currentChat !== GENERAL_CHAT_ID ? (chatMeta && chatMeta.type === 'group') : (currentChat === GENERAL_CHAT_ID));
     msgs.forEach((msg, idx) => {
         const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
         const ds = dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
@@ -1395,8 +1537,11 @@ function renderFromCache(cid) {
             lastDate = ds;
         }
         const nextMsg = msgs[idx + 1];
-        const showAvatar = !nextMsg || nextMsg.userId !== msg.userId;
-        appendMsg(msg, dt, area, cid, groupChat, showAvatar);
+        // Channel posts all share one visual identity (the channel), so
+        // consecutive posts group together even when different admins
+        // wrote them — only the sender's own userId matters elsewhere.
+        const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== msg.userId);
+        appendMsg(msg, dt, area, cid, groupChat, showAvatar, isChannel);
     });
     area.scrollTop = 999999;
 }
@@ -1429,7 +1574,9 @@ function renderMessagesSnapshot(snap, cid) {
         return;
     }
 
-    const groupChat = currentChat === GENERAL_CHAT_ID || (allChats[currentChat] && allChats[currentChat].type === 'group');
+    const chatMeta = allChats[currentChat];
+    const isChannel = !!(chatMeta && chatMeta.type === 'channel');
+    const groupChat = isChannel || currentChat === GENERAL_CHAT_ID || (chatMeta && chatMeta.type === 'group');
     let lastDate = null;
     msgs.forEach((msg, idx) => {
         const dt = msg.timestamp?.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp);
@@ -1442,8 +1589,8 @@ function renderMessagesSnapshot(snap, cid) {
             lastDate = ds;
         }
         const nextMsg = msgs[idx + 1];
-        const showAvatar = !nextMsg || nextMsg.userId !== msg.userId;
-        appendMsg(msg, dt, area, cid, groupChat, showAvatar);
+        const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== msg.userId);
+        appendMsg(msg, dt, area, cid, groupChat, showAvatar, isChannel);
     });
     area.scrollTop = 999999;
 
@@ -1537,8 +1684,11 @@ function handleIncomingChanges(changes) {
 }
 
 // ==================== APPEND MSG ====================
-function appendMsg(m, dt, area, cid, groupChat, showAvatar) {
-    const isMine = m.userId === currentUser.uid;
+function appendMsg(m, dt, area, cid, groupChat, showAvatar, isChannel) {
+    // Channel posts are authored "by the channel", not by whichever admin
+    // hit send — so even the admin who posted it sees it as an incoming
+    // message from the channel, exactly like every other subscriber does.
+    const isMine = isChannel ? false : (m.userId === currentUser.uid);
     const wrapper = document.createElement('div');
     wrapper.className = 'msg-wrap ' + (isMine ? 'sent' : 'received');
     wrapper.id = 'msg-' + m.id;
@@ -1559,25 +1709,27 @@ function appendMsg(m, dt, area, cid, groupChat, showAvatar) {
     wrapper.addEventListener('click', function (e) {
         if (selectionMode) return;
         e.stopPropagation();
-        showMessageMenu(m, wrapper, cid, isMine);
+        showMessageMenu(m, wrapper, cid, isMine, isChannel);
     });
 
-    // In group chats, show the sender's avatar next to received messages
-    // (like Telegram). Consecutive messages from the same sender only show
-    // the avatar on the last one, but a same-size invisible slot is kept
-    // for the earlier ones so every bubble still lines up.
+    // In group chats (and always in channels), show the sender's avatar
+    // next to received messages, like Telegram. Consecutive messages from
+    // the same sender only show the avatar on the last one, but a
+    // same-size invisible slot is kept for the earlier ones so every
+    // bubble still lines up. Channel posts use the channel's own identity
+    // instead of whichever admin actually wrote them.
+    const channelMeta = isChannel ? (allChats[cid] || {}) : null;
     if (groupChat && !isMine) {
-        const sender = allUsers[m.userId];
+        const senderName = isChannel ? (channelMeta.name || 'Канал') : (allUsers[m.userId] ? allUsers[m.userId].displayName : '');
+        const senderAvatar = isChannel ? channelMeta.avatarUrl : (allUsers[m.userId] && allUsers[m.userId].avatarUrl);
         const avatarEl = document.createElement('div');
         avatarEl.className = 'msg-avatar' + (showAvatar ? '' : ' msg-avatar-hidden');
         if (showAvatar) {
-            avatarEl.innerHTML = sender && sender.avatarUrl
-                ? '<img src="' + sender.avatarUrl + '">'
-                : initials(sender ? sender.displayName : '');
+            avatarEl.innerHTML = senderAvatar ? '<img src="' + senderAvatar + '">' : initials(senderName);
             avatarEl.style.cursor = 'pointer';
             avatarEl.onclick = function (e) {
                 e.stopPropagation();
-                viewUserProfile(m.userId);
+                if (isChannel) showChatInfo(cid); else viewUserProfile(m.userId);
             };
         }
         wrapper.appendChild(avatarEl);
@@ -1586,14 +1738,31 @@ function appendMsg(m, dt, area, cid, groupChat, showAvatar) {
     const bubble = document.createElement('div');
     bubble.className = 'msg-bub';
 
+    if (currentPinnedIds.has(m.id)) {
+        const pinBadge = document.createElement('div');
+        pinBadge.className = 'msg-pin-badge';
+        pinBadge.innerHTML = '<i class="fas fa-thumbtack"></i>';
+        bubble.appendChild(pinBadge);
+    }
+
     // In group chats, label who sent each received message (skipped for
-    // DMs/channels where it would be redundant or the sender is implicit).
+    // DMs where it would be redundant). Channels always show the channel
+    // name as the label, same as the avatar above.
     if (groupChat && !isMine) {
-        const sender = allUsers[m.userId];
         const label = document.createElement('div');
         label.className = 'sender-name-label';
-        label.textContent = sender ? (sender.displayName || 'Пользователь') : 'Пользователь';
+        label.textContent = isChannel ? (channelMeta.name || 'Канал') : (allUsers[m.userId] ? (allUsers[m.userId].displayName || 'Пользователь') : 'Пользователь');
         bubble.appendChild(label);
+    }
+
+    if (m.forwardFrom) {
+        const fwdBlock = document.createElement('div');
+        fwdBlock.className = 'msg-forward-label';
+        fwdBlock.innerHTML = '<i class="fas fa-share"></i> ';
+        const fwdName = document.createElement('span');
+        fwdName.textContent = 'Переслано от ' + (m.forwardFrom.name || 'Пользователь');
+        fwdBlock.appendChild(fwdName);
+        bubble.appendChild(fwdBlock);
     }
 
     if (m.replyTo) {
@@ -1709,15 +1878,40 @@ function appendMsg(m, dt, area, cid, groupChat, showAvatar) {
         bubble.appendChild(reactionRow);
     }
 
-    wrapper.appendChild(bubble);
+    // The bubble (and, for channels, the comments pill below it) live in
+    // their own column so they stack vertically. Without this they were
+    // direct children of .msg-wrap, which is a *row* flex container (it
+    // also holds the avatar) — that squeezed the bubble down to almost
+    // nothing to make room for the pill next to it, which combined with
+    // word-break:break-word wrapped the message one character per line.
+    const bubbleCol = document.createElement('div');
+    bubbleCol.className = 'msg-bubble-col';
+    bubbleCol.appendChild(bubble);
+
+    if (isChannel) {
+        const count = m.commentCount || 0;
+        const commentsPill = document.createElement('div');
+        commentsPill.className = 'msg-comments-pill';
+        commentsPill.innerHTML = '<i class="far fa-comment"></i> ' + (count > 0 ? count : 'Комментировать');
+        commentsPill.onclick = function (e) {
+            e.stopPropagation();
+            openPostComments(m, cid);
+        };
+        bubbleCol.appendChild(commentsPill);
+    }
+
+    wrapper.appendChild(bubbleCol);
+
     area.appendChild(wrapper);
 }
 
 // ==================== MESSAGE MENU ====================
-function showMessageMenu(msg, wrapper, cid, isMine) {
+function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
     document.querySelectorAll('.msg-context-menu').forEach(m => m.remove());
 
     const canDelete = isMine || (allChats[currentChat] && (allChats[currentChat].admins || []).includes(currentUser.uid));
+    const canPin = canPinIn(currentChat);
+    const isPinned = currentPinnedIds.has(msg.id);
 
     const menu = document.createElement('div');
     menu.className = 'msg-context-menu';
@@ -1745,11 +1939,21 @@ function showMessageMenu(msg, wrapper, cid, isMine) {
     replyBtn.innerHTML = '<i class="fas fa-reply"></i> Ответить';
     replyBtn.onclick = function (e) {
         e.stopPropagation();
-        const senderName = isMine ? 'Вы' : (allUsers[msg.userId]?.displayName || 'Пользователь');
+        const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[msg.userId]?.displayName || 'Пользователь'));
         setReply(msg.id, msg.text, senderName);
         menu.remove();
     };
     menu.appendChild(replyBtn);
+
+    const forwardBtn = document.createElement('button');
+    forwardBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--text);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
+    forwardBtn.innerHTML = '<i class="fas fa-share"></i> Переслать';
+    forwardBtn.onclick = function (e) {
+        e.stopPropagation();
+        openForwardPicker(msg, isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (allUsers[msg.userId] ? allUsers[msg.userId].displayName : 'Пользователь'));
+        menu.remove();
+    };
+    menu.appendChild(forwardBtn);
 
     const reactions = ['👍', '❤️', '😂', '😮', '😡', '🔥', '👏', '🎉', '💯', '😍', '🤔', '🙏'];
     const reactionRow = document.createElement('div');
@@ -1767,6 +1971,18 @@ function showMessageMenu(msg, wrapper, cid, isMine) {
     });
     menu.appendChild(reactionRow);
 
+    if (canPin) {
+        const pinBtn = document.createElement('button');
+        pinBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--text);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
+        pinBtn.innerHTML = isPinned ? '<i class="fas fa-thumbtack"></i> Открепить' : '<i class="fas fa-thumbtack"></i> Закрепить';
+        pinBtn.onclick = function (e) {
+            e.stopPropagation();
+            togglePinMessage(msg, cid);
+            menu.remove();
+        };
+        menu.appendChild(pinBtn);
+    }
+
     if (canDelete) {
         const deleteBtn = document.createElement('button');
         deleteBtn.style.cssText = 'padding:10px 14px;border:none;background:transparent;color:var(--danger);font-size:14px;font-family:inherit;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;';
@@ -1775,6 +1991,9 @@ function showMessageMenu(msg, wrapper, cid, isMine) {
             e.stopPropagation();
             showCustomConfirm('Удалить сообщение?', async function () {
                 await db.collection('messages').doc(msg.id).delete();
+                if (currentPinnedIds.has(msg.id)) {
+                    db.collection('chatMeta').doc(cid).set({ pinnedMessages: firebase.firestore.FieldValue.arrayRemove(msg.id) }, { merge: true }).catch(() => {});
+                }
                 const idx = messageCache[cid]?.findIndex(x => x.id === msg.id);
                 if (idx > -1) messageCache[cid].splice(idx, 1);
                 wrapper.style.opacity = '0';
@@ -1918,6 +2137,113 @@ async function sendMsg() {
     }
 }
 
+// ==================== FORWARD ====================
+// Same participants shape sendMsg computes for the currently-open chat,
+// generalized to any target chat id so forwarding can send into a chat
+// that isn't the one currently open.
+function computeParticipants(targetId) {
+    if (targetId === GENERAL_CHAT_ID) return null;
+    if (isGroupLike(targetId)) {
+        const meta = allChats[targetId] || {};
+        const members = meta.members || [];
+        const admins = meta.admins || [];
+        return [...new Set([...members, ...admins])];
+    }
+    return [currentUser.uid, targetId];
+}
+
+// Bottom sheet listing every chat you can forward into: your DMs, your
+// groups, channels you admin, and the general chat.
+function openForwardPicker(msg, originName) {
+    const ids = new Set([...activeChats, ...myChatIds, GENERAL_CHAT_ID]);
+    const targets = [];
+    ids.forEach(id => {
+        const isGroup = isGroupLike(id);
+        const meta = id === GENERAL_CHAT_ID ? { name: 'Общий чат' } : (isGroup ? allChats[id] : allUsers[id]);
+        if (!meta) return;
+        if (isGroup && id !== GENERAL_CHAT_ID && meta.type === 'channel' && !(meta.admins || []).includes(currentUser.uid)) return;
+        targets.push({ id, isGroup, meta });
+    });
+
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet story-viewers-sheet';
+
+    const title = document.createElement('div');
+    title.className = 'story-viewers-title';
+    title.textContent = 'Переслать сообщение';
+    sheet.appendChild(title);
+
+    const list = document.createElement('div');
+    list.className = 'tg-info-list';
+    if (!targets.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:16px;text-align:center;color:var(--text-secondary);font-size:14px;';
+        empty.textContent = 'Нет доступных чатов';
+        list.appendChild(empty);
+    }
+    targets.forEach(t => {
+        const name = t.isGroup ? (t.meta.name || 'Чат') : (t.meta.displayName || 'Пользователь');
+        const row = document.createElement('div');
+        row.className = 'member-row';
+        const avatarWrap = document.createElement('div');
+        avatarWrap.className = 'avatar';
+        avatarWrap.innerHTML = t.meta.avatarUrl ? '<img src="' + t.meta.avatarUrl + '">' : initials(name);
+        const info = document.createElement('div');
+        info.className = 'member-row-info';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'member-row-name';
+        nameEl.textContent = name;
+        info.appendChild(nameEl);
+        row.appendChild(avatarWrap);
+        row.appendChild(info);
+        row.onclick = () => {
+            forwardMessageTo(t.id, msg, originName);
+            overlay.remove();
+        };
+        list.appendChild(row);
+    });
+    sheet.appendChild(list);
+
+    overlay.appendChild(sheet);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+}
+
+async function forwardMessageTo(targetId, msg, originName) {
+    const cid = chatIdFor(targetId);
+    const participants = computeParticipants(targetId);
+
+    const payload = {
+        text: msg.text || '',
+        imageUrl: msg.imageUrl || '',
+        fileName: msg.fileName || '',
+        fileType: msg.fileType || '',
+        fileUrl: msg.imageUrl || '',
+        userId: currentUser.uid,
+        chatId: cid,
+        readBy: [],
+        replyTo: null,
+        reactions: {},
+        forwardFrom: { name: originName || 'Пользователь' },
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    if (participants) payload.participants = participants;
+
+    try {
+        await db.collection('messages').add(payload);
+        if (!isGroupLike(targetId) && !activeChats.has(targetId)) {
+            activeChats.add(targetId);
+            await loadChatPreview(targetId, cid);
+        }
+        renderChatList();
+    } catch (e) {
+        console.error('Forward error:', e);
+        showCustomAlert('Не удалось переслать сообщение');
+    }
+}
+
 function compressFile(file) {
     return new Promise(resolve => {
         const reader = new FileReader();
@@ -2051,7 +2377,73 @@ function watchChatMeta(id) {
     });
 }
 
-// ==================== TYPING (DMs only) ====================
+// ==================== PINNED MESSAGES ====================
+// Stored in a separate "chatMeta" collection keyed by the same chat id
+// used for messages (cid) — this covers DMs (composite uid pair id),
+// groups/channels, and the general chat uniformly, without needing a
+// "chats" doc to already exist (DMs and "general" don't have one).
+function watchPinned(cid) {
+    if (unsubscribePinned) { unsubscribePinned(); unsubscribePinned = null; }
+    currentPinnedIds = new Set();
+    currentPinnedList = [];
+    pinnedShownIndex = 0;
+    renderPinnedBar();
+
+    unsubscribePinned = db.collection('chatMeta').doc(cid).onSnapshot(doc => {
+        const data = doc.exists ? doc.data() : null;
+        currentPinnedList = (data && data.pinnedMessages) || [];
+        currentPinnedIds = new Set(currentPinnedList);
+        if (pinnedShownIndex >= currentPinnedList.length) pinnedShownIndex = Math.max(0, currentPinnedList.length - 1);
+        renderPinnedBar();
+        // Pin badges on already-rendered bubbles need a repaint too.
+        if (chatIdFor(currentChat) === cid) renderFromCache(cid);
+    }, () => {});
+}
+
+function renderPinnedBar() {
+    const bar = $('#pinnedBar');
+    const text = $('#pinnedBarText');
+    if (!bar || !text) return;
+
+    if (!currentPinnedList.length) {
+        bar.classList.add('hidden');
+        return;
+    }
+
+    const cid = chatIdFor(currentChat);
+    const msgId = currentPinnedList[pinnedShownIndex];
+    const msg = (messageCache[cid] || []).find(x => x.id === msgId);
+    text.textContent = msg ? (msg.imageUrl ? 'Фото' : (msg.text || 'Сообщение')).substring(0, 60) : 'Закреплённое сообщение';
+    bar.classList.remove('hidden');
+
+    bar.onclick = function (e) {
+        if (e.target.closest('#pinnedBarClose')) return;
+        const el = document.getElementById('msg-' + msgId);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pinnedShownIndex = (pinnedShownIndex + 1) % currentPinnedList.length;
+        renderPinnedBar();
+    };
+}
+
+function canPinIn(id) {
+    if (!isGroupLike(id)) return true; // DMs: either side can pin, like Telegram
+    if (id === GENERAL_CHAT_ID) return true; // no admin concept for the general chat
+    const meta = allChats[id];
+    return !!(meta && (meta.admins || []).includes(currentUser.uid));
+}
+
+async function togglePinMessage(msg, cid) {
+    const ref = db.collection('chatMeta').doc(cid);
+    try {
+        if (currentPinnedIds.has(msg.id)) {
+            await ref.set({ pinnedMessages: firebase.firestore.FieldValue.arrayRemove(msg.id) }, { merge: true });
+        } else {
+            await ref.set({ pinnedMessages: firebase.firestore.FieldValue.arrayUnion(msg.id) }, { merge: true });
+        }
+    } catch (e) { console.error('Pin error:', e); }
+}
+
+
 function setTyping() {
     if (!currentUser || !currentChat || !currentProfile || isGroupLike(currentChat)) return;
     if (currentProfile.typingIndicatorEnabled === false) return;
@@ -2828,6 +3220,18 @@ function setupListeners() {
     $('#deleteSelectedBtn').onclick = deleteSelected;
     $('#newChatBtn').onclick = showCreateChatMenu;
     setupStoriesHideOnScroll();
+
+    const pinnedBarClose = $('#pinnedBarClose');
+    if (pinnedBarClose) {
+        pinnedBarClose.onclick = (e) => {
+            e.stopPropagation();
+            if (!currentChat || !currentPinnedList.length) return;
+            const cid = chatIdFor(currentChat);
+            const msgId = currentPinnedList[pinnedShownIndex];
+            const msg = (messageCache[cid] || []).find(x => x.id === msgId) || { id: msgId };
+            togglePinMessage(msg, cid);
+        };
+    }
 
     const sendBtn = $('#sendBtn');
     // Prevents the classic "keyboard closes then reopens" flicker: by
