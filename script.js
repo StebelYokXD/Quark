@@ -691,6 +691,7 @@ function buildMainUI() {
                 <span class="pinned-bar-close" id="pinnedBarClose"><i class="fas fa-times"></i></span>
             </div>
             <div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
+            <button class="scroll-bottom-btn" id="scrollBottomBtn"><i class="fas fa-chevron-down"></i></button>
             <div class="input-container" id="inputContainer">
                 <div class="mention-suggestions hidden" id="mentionSuggestions"></div>
                 <div class="reply-bar hidden" id="replyBar"><div class="reply-preview" id="replyPreview"></div><span class="reply-close" id="replyClose">✕</span></div>
@@ -1886,6 +1887,30 @@ function subscribe(cid) {
 
 // Applies added/modified/removed message changes onto the already-
 // rendered chat without touching any bubble that didn't actually change.
+// Rebuilds just the one bubble for `id`, in place — the same targeted
+// technique applyMessageChanges uses for incoming snapshot changes.
+// For local actions (toggling a reaction, pinning) that already know
+// exactly which message changed, this avoids the full-chat blank-and-
+// rebuild that renderFromCache does, which is what caused the reaction/
+// pin flicker.
+function patchSingleMessage(cid, id) {
+    const area = (currentChat !== null && chatIdFor(currentChat) === cid) ? $('#msgArea') : null;
+    if (!area) return;
+    const msgs = messageCache[cid] || [];
+    const pos = msgs.findIndex(x => x.id === id);
+    if (pos === -1) return;
+
+    const chatMeta = allChats[currentChat];
+    const isChannel = !!(chatMeta && chatMeta.type === 'channel');
+    const groupChat = isChannel || currentChat === GENERAL_CHAT_ID || (chatMeta && chatMeta.type === 'group');
+    const data = msgs[pos];
+    const nextMsg = msgs[pos + 1];
+    const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
+    const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
+    const el = document.getElementById('msg-' + id);
+    if (el) el.replaceWith(fresh); else area.appendChild(fresh);
+}
+
 function applyMessageChanges(changes, cid) {
     const msgs = messageCache[cid] || [];
     const area = (currentChat !== null && chatIdFor(currentChat) === cid) ? $('#msgArea') : null;
@@ -2313,6 +2338,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         txt.appendChild(renderTextWithMentions(m.text));
         txt.style.flex = '1';
         txt.style.minWidth = '0';
+        txt.style.whiteSpace = 'pre-wrap';
         row.appendChild(txt);
 
         const timeSpan = buildTimeSpan();
@@ -2517,13 +2543,17 @@ async function toggleReaction(msg, emoji) {
         reactions[emoji].push(currentUser.uid);
     }
 
-    await db.collection('messages').doc(msg.id).update({ reactions: reactions });
-
     const cid = chatIdFor(currentChat);
     if (messageCache[cid]) {
         const msgInCache = messageCache[cid].find(m => m.id === msg.id);
         if (msgInCache) msgInCache.reactions = reactions;
-        renderFromCache(cid);
+        patchSingleMessage(cid, msg.id);
+    }
+
+    try {
+        await db.collection('messages').doc(msg.id).update({ reactions: reactions });
+    } catch (e) {
+        console.error('Reaction error:', e);
     }
 }
 
@@ -2885,6 +2915,7 @@ function watchPinned(cid) {
     unsubscribePinned = db.collection('chatMeta').doc(cid).onSnapshot(doc => {
         const data = doc.exists ? doc.data() : null;
         const newList = (data && data.pinnedMessages) || [];
+        const prevIds = currentPinnedIds;
         // Show the newest pin by default (like Telegram) — a freshly pinned
         // message jumps the bar to it; otherwise just keep the index valid.
         if (newList.length > currentPinnedList.length) {
@@ -2895,8 +2926,13 @@ function watchPinned(cid) {
         currentPinnedList = newList;
         currentPinnedIds = new Set(currentPinnedList);
         renderPinnedBar();
-        // Pin badges on already-rendered bubbles need a repaint too.
-        if (chatIdFor(currentChat) === cid) renderFromCache(cid);
+        // Only the bubbles whose pinned status actually flipped need their
+        // pin badge repainted — patching the whole chat here was flickering
+        // every bubble on every pin/unpin.
+        if (chatIdFor(currentChat) === cid) {
+            const changed = new Set([...prevIds, ...currentPinnedIds].filter(id => prevIds.has(id) !== currentPinnedIds.has(id)));
+            changed.forEach(id => patchSingleMessage(cid, id));
+        }
     }, () => {});
 }
 
@@ -3738,6 +3774,29 @@ function setupStoriesHideOnScroll() {
 }
 
 // ==================== SETUP LISTENERS ====================
+// Shows a floating "jump to bottom" button once you've scrolled up away
+// from the latest messages, like Telegram — click it to snap back down.
+function setupScrollToBottomBtn() {
+    const area = $('#msgArea');
+    const btn = $('#scrollBottomBtn');
+    if (!area || !btn) return;
+
+    let ticking = false;
+    area.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            const distanceFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
+            btn.classList.toggle('visible', distanceFromBottom > 400);
+            ticking = false;
+        });
+    }, { passive: true });
+
+    btn.onclick = () => {
+        area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+    };
+}
+
 function setupListeners() {
     $$('.nav-item, .dt-nav-btn').forEach(n => n.onclick = () => showScreen(n.dataset.sc));
     $('#backBtn').onclick = () => showScreen('screenChats');
@@ -3745,6 +3804,7 @@ function setupListeners() {
     $('#deleteSelectedBtn').onclick = deleteSelected;
     $('#newChatBtn').onclick = showCreateChatMenu;
     setupStoriesHideOnScroll();
+    setupScrollToBottomBtn();
 
     const pinnedBarClose = $('#pinnedBarClose');
     if (pinnedBarClose) {
