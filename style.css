@@ -414,6 +414,10 @@ body {
     transition: background 0.15s ease;
 }
 
+.chat-item:hover {
+    background: var(--hover);
+}
+
 .chat-item:active {
     background: var(--surface);
 }
@@ -466,6 +470,22 @@ body {
     font-size: calc(15px * var(--ui-scale, 1));
     color: var(--text);
     letter-spacing: -0.01em;
+}
+
+.chat-unread-badge {
+    background: linear-gradient(135deg, var(--primary), #A78BFA);
+    color: white;
+    border-radius: calc(10px * var(--ui-scale, 1));
+    min-width: calc(20px * var(--ui-scale, 1));
+    height: calc(20px * var(--ui-scale, 1));
+    padding: 0 calc(6px * var(--ui-scale, 1));
+    font-size: calc(11px * var(--ui-scale, 1));
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: calc(4px * var(--ui-scale, 1));
+    box-shadow: 0 2px 8px var(--primary-glow);
 }
 
 .chat-preview {
@@ -545,28 +565,38 @@ body {
 
 .msg-bub {
     padding: calc(10px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1));
-    border-radius: calc(19px * var(--ui-scale, 1));
+    border-radius: calc(20px * var(--ui-scale, 1));
     font-size: calc(14px * var(--ui-scale, 1));
     line-height: 1.45;
     word-break: break-word;
     min-width: 0;
     max-width: 100%;
     box-sizing: border-box;
-    box-shadow: var(--shadow-sm);
     position: relative;
+    transition: transform 0.12s ease;
+}
+
+.msg-wrap:active .msg-bub {
+    transform: scale(0.985);
 }
 
 .sent .msg-bub {
     background: var(--message-out);
+    background: linear-gradient(155deg, var(--message-out), color-mix(in srgb, var(--message-out) 78%, var(--primary)));
     color: var(--text);
     border-bottom-right-radius: calc(6px * var(--ui-scale, 1));
+    box-shadow: 0 3px 14px color-mix(in srgb, var(--primary-glow) 55%, transparent), var(--shadow-sm);
+    box-shadow: var(--shadow-sm);
 }
 
 .received .msg-bub {
     background: var(--message-in);
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     color: var(--text);
+    border: 1px solid var(--glass-border);
     border-bottom-left-radius: calc(6px * var(--ui-scale, 1));
+    box-shadow: var(--shadow-sm);
 }
 
 .msg-avatar {
@@ -611,6 +641,25 @@ body {
     top: calc(2px * var(--ui-scale, 1));
 }
 
+.msg-ticks {
+    display: inline-flex;
+    align-items: center;
+    margin-left: calc(4px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    vertical-align: -1px;
+}
+
+.msg-ticks svg {
+    height: calc(7.5px * var(--ui-scale, 1));
+    width: auto;
+    display: block;
+    color: inherit;
+}
+
+.msg-ticks.read {
+    color: var(--primary);
+}
+
 /* Reply */
 .msg-reply-block {
     border-left: 3px solid var(--primary);
@@ -640,16 +689,24 @@ body {
 
 /* Reactions */
 .msg-reaction-chip {
-    background: rgba(128, 128, 128, 0.2);
-    border-radius: calc(12px * var(--ui-scale, 1));
-    padding: calc(4px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1));
-    font-size: calc(13px * var(--ui-scale, 1));
+    background: var(--surface);
+    border: 1px solid var(--glass-border);
+    border-radius: calc(13px * var(--ui-scale, 1));
+    padding: calc(3px * var(--ui-scale, 1)) calc(9px * var(--ui-scale, 1));
+    font-size: calc(12.5px * var(--ui-scale, 1));
+    font-weight: 600;
     cursor: pointer;
-    transition: transform 0.15s ease;
+    transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.15s ease;
+    box-shadow: var(--shadow-sm);
 }
 
-.msg-reaction-chip:hover {
-    transform: scale(1.1);
+.msg-reaction-chip:active {
+    transform: scale(0.9);
+}
+
+.msg-reaction-chip.mine {
+    background: color-mix(in srgb, var(--primary) 18%, var(--surface));
+    border-color: var(--primary);
 }
 
 .reaction-emoji-btn {
@@ -1772,9 +1829,14 @@ body {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 8px 22px var(--primary-glow), var(--shadow-lg);
     z-index: 30;
-    transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+}
+
+.fab-new-chat:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 28px var(--primary-glow), var(--shadow-lg);
 }
 
 .fab-new-chat:active {

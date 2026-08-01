@@ -16,6 +16,16 @@ db.settings({ ignoreUndefinedProperties: true });
 const GENERAL_CHAT_ID = 'general';
 
 // ==================== GLOBAL STATE ====================
+// Hand-drawn checkmark ticks matching WhatsApp/Telegram's actual look
+// (thin round-capped stroke, second check overlapping the first) — a
+// generic checkmark icon font glyph doesn't replicate this shape.
+// The double-check's right-hand stroke is the exact same shape as the
+// single check (just shifted right), and both SVGs share the same
+// vertical range, so read/unread ticks always render at the identical
+// size — only the double one is wider because it has a second stroke.
+const TICK_SINGLE_SVG = '<svg viewBox="-0.75 -0.75 10.5 9.5" width="10" height="9"><polyline points="0,5 3,8 9,0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const TICK_DOUBLE_SVG = '<svg viewBox="-0.75 -0.75 15.5 9.5" width="15" height="9"><polyline points="0,5 3,8 9,0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><polyline points="5,5 8,8 14,0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 let currentUser = null;
 let currentProfile = null;
 let allUsers = {};
@@ -1183,7 +1193,7 @@ function buildChatRow(id, isGroup, meta) {
         '</div>' +
         '<div class="chat-meta">' +
         '<div class="chat-time">' + formatTime(time) + '</div>' +
-        (unread > 0 ? '<div style="background:var(--primary);color:white;border-radius:10px;padding:2px 7px;font-size:10px;margin-top:3px;display:inline-block;">' + unread + '</div>' : '') +
+        (unread > 0 ? '<div class="chat-unread-badge">' + (unread > 99 ? '99+' : unread) + '</div>' : '') +
         '</div>';
     div.onclick = () => { unreadCounts[id] = 0; openChat(id); };
     return div;
@@ -2558,13 +2568,13 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         if (showReadTicks) {
             const isRead = m.readBy && m.readBy.length > 0;
             const check = document.createElement('span');
-            check.style.cssText = 'font-size:10px;margin-left:2px;color:' + (isRead ? 'var(--primary)' : 'var(--text-secondary)');
-            check.textContent = isRead ? '✓✓' : '✓';
+            check.className = 'msg-ticks' + (isRead ? ' read' : '');
+            check.innerHTML = isRead ? TICK_DOUBLE_SVG : TICK_SINGLE_SVG;
             timeSpan.appendChild(check);
         } else if (isMine && !isChannel) {
             const check = document.createElement('span');
-            check.style.cssText = 'font-size:10px;margin-left:2px;color:var(--text-secondary)';
-            check.textContent = '✓';
+            check.className = 'msg-ticks';
+            check.innerHTML = TICK_SINGLE_SVG;
             timeSpan.appendChild(check);
         }
         return timeSpan;
@@ -2601,7 +2611,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         for (const [emoji, users] of Object.entries(m.reactions)) {
             if (!users || !users.length) continue;
             const chip = document.createElement('span');
-            chip.className = 'msg-reaction-chip';
+            chip.className = 'msg-reaction-chip' + (users.includes(currentUser.uid) ? ' mine' : '');
             chip.textContent = emoji + ' ' + users.length;
             chip.onclick = function (e) { e.stopPropagation(); toggleReaction(m, emoji); };
             reactionRow.appendChild(chip);
