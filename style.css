@@ -119,6 +119,27 @@ body {
     z-index: 5;
 }
 
+/* The open-chat header floats over the message list instead of pushing
+   it down — messages scroll up underneath the blur, same as Telegram's
+   chat view. --chat-header-h is kept in sync with the header's real
+   rendered height by a ResizeObserver (see setupListeners), since the
+   typing indicator can make it taller. */
+#screenMessages > .header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 6;
+}
+
+#screenMessages > .pinned-bar {
+    margin-top: var(--chat-header-h, 58px);
+}
+
+#screenMessages > .msg-area.no-pinned-bar {
+    padding-top: calc(var(--chat-header-h, 58px) + calc(10px * var(--ui-scale, 1)));
+}
+
 .avatar.chat-header-avatar {
     width: calc(36px * var(--ui-scale, 1));
     height: calc(36px * var(--ui-scale, 1));
@@ -775,17 +796,30 @@ body {
 
 /* Smooth bubble entrance — only applied to genuinely new messages (see
    isNew in appendMsg/renderMessagesSnapshot), not the whole chat history
-   every time it re-renders. */
+   every time it re-renders. Scales in from the corner it visually comes
+   from (the composer for sent, the sender's avatar for received) with a
+   gentle spring overshoot, rather than growing from dead-center. */
 .msg-wrap.msg-appear {
-    animation: msgAppear 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    animation: msgAppear 0.36s cubic-bezier(0.22, 1.12, 0.36, 1);
+}
+
+.msg-wrap.sent.msg-appear {
+    transform-origin: bottom right;
+}
+
+.msg-wrap.received.msg-appear {
+    transform-origin: bottom left;
 }
 
 @keyframes msgAppear {
-    from {
+    0% {
         opacity: 0;
-        transform: translateY(14px) scale(0.92);
+        transform: translateY(16px) scale(0.82);
     }
-    to {
+    55% {
+        opacity: 1;
+    }
+    100% {
         opacity: 1;
         transform: translateY(0) scale(1);
     }
@@ -940,6 +974,17 @@ body {
 .send-btn:disabled {
     opacity: 0.4;
     box-shadow: none;
+}
+
+.send-btn.sent-pulse {
+    animation: sendPulse 0.38s cubic-bezier(0.22, 1.12, 0.36, 1);
+}
+
+@keyframes sendPulse {
+    0% { transform: scale(1); }
+    35% { transform: scale(0.82) rotate(-8deg); }
+    70% { transform: scale(1.12) rotate(4deg); }
+    100% { transform: scale(1) rotate(0deg); }
 }
 
 /* Attach menu */
@@ -1267,7 +1312,7 @@ body {
     margin-bottom: calc(16px * var(--ui-scale, 1));
 }
 
-/* Full viewer */
+/* Full viewer (Telegram-style photo viewer) */
 .full-viewer {
     position: fixed;
     top: 0;
@@ -1276,24 +1321,24 @@ body {
     height: 100%;
     background: rgba(0, 0, 0, 0.95);
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
     z-index: 200;
+    animation: pop 0.15s ease;
 }
 
-.full-viewer img {
-    max-width: 95%;
-    max-height: 95%;
-    border-radius: calc(10px * var(--ui-scale, 1));
-    object-fit: contain;
+.fv-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: calc(14px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    padding-top: calc(calc(14px * var(--ui-scale, 1)) + env(safe-area-inset-top, 0px));
+    flex-shrink: 0;
+    z-index: 2;
 }
 
-.full-viewer-close {
-    position: absolute;
-    top: calc(14px * var(--ui-scale, 1));
-    right: calc(14px * var(--ui-scale, 1));
+.fv-close, .fv-download {
     color: white;
-    font-size: calc(26px * var(--ui-scale, 1));
+    font-size: calc(18px * var(--ui-scale, 1));
     width: calc(40px * var(--ui-scale, 1));
     height: calc(40px * var(--ui-scale, 1));
     display: flex;
@@ -1305,10 +1350,67 @@ body {
     -webkit-backdrop-filter: blur(10px);
     cursor: pointer;
     transition: transform 0.15s ease;
+    flex-shrink: 0;
+    text-decoration: none;
 }
 
-.full-viewer-close:active {
+.fv-close:active, .fv-download:active {
     transform: scale(0.9);
+}
+
+.fv-counter {
+    color: white;
+    font-size: calc(13.5px * var(--ui-scale, 1));
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.fv-stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+    touch-action: none;
+}
+
+.fv-img {
+    max-width: 95%;
+    max-height: 95%;
+    border-radius: calc(6px * var(--ui-scale, 1));
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    transition: transform 0.08s ease-out;
+    will-change: transform;
+}
+
+.fv-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: calc(40px * var(--ui-scale, 1));
+    height: calc(40px * var(--ui-scale, 1));
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(15px * var(--ui-scale, 1));
+    cursor: pointer;
+    z-index: 2;
+}
+
+.fv-prev { left: calc(14px * var(--ui-scale, 1)); }
+.fv-next { right: calc(14px * var(--ui-scale, 1)); }
+
+@media (max-width: 768px) {
+    .fv-nav { display: none; }
 }
 
 /* Utilities */
@@ -2796,4 +2898,187 @@ body {
     align-items: center;
     justify-content: center;
     padding: 0 calc(3px * var(--ui-scale, 1));
+}
+
+/* ==================== ACCENT THEMES ==================== */
+/* Swap just the accent + outgoing-bubble tint on top of light/dark mode,
+   so every existing surface/text/shadow variable stays correctly tuned
+   for contrast — only the "brand color" changes. */
+.accent-blue { --primary: #2F80ED; --primary-dark: #1C64D1; --primary-glow: rgba(47, 128, 237, 0.4); --message-out: #BFDBFE; }
+.dark-theme.accent-blue { --primary: #3B82F6; --primary-dark: #2563EB; --primary-glow: rgba(59, 130, 246, 0.35); --message-out: #1E3A5F; }
+
+.accent-green { --primary: #10B981; --primary-dark: #059669; --primary-glow: rgba(16, 185, 129, 0.4); --message-out: #BBF7D0; }
+.dark-theme.accent-green { --primary: #34D399; --primary-dark: #10B981; --primary-glow: rgba(52, 211, 153, 0.35); --message-out: #134E36; }
+
+.accent-pink { --primary: #EC4899; --primary-dark: #DB2777; --primary-glow: rgba(236, 72, 153, 0.4); --message-out: #FBCFE8; }
+.dark-theme.accent-pink { --primary: #F472B6; --primary-dark: #EC4899; --primary-glow: rgba(244, 114, 182, 0.35); --message-out: #5B1A40; }
+
+.accent-orange { --primary: #F97316; --primary-dark: #EA580C; --primary-glow: rgba(249, 115, 22, 0.4); --message-out: #FED7AA; }
+.dark-theme.accent-orange { --primary: #FB923C; --primary-dark: #F97316; --primary-glow: rgba(251, 146, 60, 0.35); --message-out: #5C2E0C; }
+
+.accent-teal { --primary: #14B8A6; --primary-dark: #0D9488; --primary-glow: rgba(20, 184, 166, 0.4); --message-out: #99F6E4; }
+.dark-theme.accent-teal { --primary: #2DD4BF; --primary-dark: #14B8A6; --primary-glow: rgba(45, 212, 191, 0.35); --message-out: #0F3D38; }
+
+.accent-red { --primary: #EF4444; --primary-dark: #DC2626; --primary-glow: rgba(239, 68, 68, 0.4); --message-out: #FECACA; }
+.dark-theme.accent-red { --primary: #F87171; --primary-dark: #EF4444; --primary-glow: rgba(248, 113, 113, 0.35); --message-out: #5C1A1A; }
+
+/* True-black variant for OLED screens, dark mode only */
+.dark-theme.amoled-mode { --bg: #000000; --surface: rgba(8, 8, 8, 0.75); --glass: rgba(8, 8, 8, 0.55); --chat-bg: #000000; }
+
+.theme-swatch-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(12px * var(--ui-scale, 1));
+    padding: calc(14px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+}
+
+.theme-swatch {
+    width: calc(44px * var(--ui-scale, 1));
+    height: calc(44px * var(--ui-scale, 1));
+    border-radius: 50%;
+    cursor: pointer;
+    border: calc(3px * var(--ui-scale, 1)) solid transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: calc(14px * var(--ui-scale, 1));
+    flex-shrink: 0;
+}
+
+.theme-swatch.active {
+    border-color: var(--text);
+}
+
+/* Forward icon in the story header (next to close) */
+.story-viewer-forward {
+    color: white;
+    font-size: calc(17px * var(--ui-scale, 1));
+    padding: calc(4px * var(--ui-scale, 1));
+    cursor: pointer;
+}
+
+/* Reply bar shown when viewing someone else's story: text input, quick
+   heart-react (long-press for more emoji), send button */
+.story-reply-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: calc(12px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1)) calc(calc(12px * var(--ui-scale, 1)) + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    align-items: center;
+    gap: calc(10px * var(--ui-scale, 1));
+    z-index: 2;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+}
+
+.story-reply-input {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: calc(20px * var(--ui-scale, 1));
+    padding: calc(9px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    color: white;
+    font-size: calc(14px * var(--ui-scale, 1));
+    outline: none;
+}
+
+.story-reply-input::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.story-quick-heart {
+    position: relative;
+    width: calc(38px * var(--ui-scale, 1));
+    height: calc(38px * var(--ui-scale, 1));
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(16px * var(--ui-scale, 1));
+    cursor: pointer;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.story-quick-heart.reacted {
+    background: rgba(239, 68, 68, 0.25);
+}
+
+.story-reply-send {
+    width: calc(38px * var(--ui-scale, 1));
+    height: calc(38px * var(--ui-scale, 1));
+    border-radius: 50%;
+    border: none;
+    background: var(--primary);
+    color: white;
+    font-size: calc(14px * var(--ui-scale, 1));
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.story-quick-emoji-popup {
+    position: absolute;
+    bottom: calc(48px * var(--ui-scale, 1));
+    right: 0;
+    background: rgba(30, 30, 30, 0.92);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: calc(24px * var(--ui-scale, 1));
+    padding: calc(6px * var(--ui-scale, 1)) calc(10px * var(--ui-scale, 1));
+    display: flex;
+    gap: calc(6px * var(--ui-scale, 1));
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.story-quick-emoji-popup-item {
+    font-size: calc(20px * var(--ui-scale, 1));
+    cursor: pointer;
+    padding: calc(3px * var(--ui-scale, 1));
+    transition: transform 0.1s ease;
+}
+
+.story-quick-emoji-popup-item:active {
+    transform: scale(1.3);
+}
+
+/* Reaction mark next to a viewer's name in the "seen by" sheet */
+.story-viewer-reaction-mark {
+    font-size: calc(17px * var(--ui-scale, 1));
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Reply-to-story preview inside a chat message bubble */
+.msg-story-reply-block {
+    display: flex;
+    align-items: center;
+    gap: calc(8px * var(--ui-scale, 1));
+    padding: calc(6px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1));
+    margin-bottom: calc(6px * var(--ui-scale, 1));
+    border-radius: calc(10px * var(--ui-scale, 1));
+    background: rgba(127, 127, 127, 0.12);
+    border-left: 3px solid var(--primary);
+}
+
+.msg-story-reply-thumb {
+    width: calc(32px * var(--ui-scale, 1));
+    height: calc(32px * var(--ui-scale, 1));
+    border-radius: calc(6px * var(--ui-scale, 1));
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.msg-story-reply-text {
+    font-size: calc(12.5px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    font-style: italic;
 }

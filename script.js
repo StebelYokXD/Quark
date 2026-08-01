@@ -36,6 +36,9 @@ let typingTimers = {};
 let selectedMessages = new Set();
 let selectionMode = false;
 let darkMode = localStorage.getItem('quark_dark') === '1';
+let accentTheme = localStorage.getItem('quark_accent') || 'purple';
+let amoledMode = localStorage.getItem('quark_amoled') === '1';
+let chatWallpaper = localStorage.getItem('quark_wallpaper') || null;
 let fontSize = localStorage.getItem('quark_font') || 'medium';
 // Desktop two-pane layout (chat list + open chat side by side, like
 // Telegram Desktop) kicks in above this width; below it we keep the
@@ -304,6 +307,9 @@ function initials(name) {
     return (name || 'П')[0].toUpperCase();
 }
 
+const ACCENT_THEMES = ['purple', 'blue', 'green', 'pink', 'orange', 'teal', 'red'];
+const ACCENT_COLORS = { purple: '#7C4DFF', blue: '#2F80ED', green: '#10B981', pink: '#EC4899', orange: '#F97316', teal: '#14B8A6', red: '#EF4444' };
+
 function applyTheme() {
     const app = $('#app');
     if (app) {
@@ -314,10 +320,37 @@ function applyTheme() {
             app.classList.remove('dark-theme');
             document.body.classList.remove('dark-theme');
         }
+        ACCENT_THEMES.forEach(t => {
+            app.classList.remove('accent-' + t);
+            document.body.classList.remove('accent-' + t);
+        });
+        if (accentTheme && accentTheme !== 'purple') {
+            app.classList.add('accent-' + accentTheme);
+            document.body.classList.add('accent-' + accentTheme);
+        }
+        app.classList.toggle('amoled-mode', darkMode && amoledMode);
+        document.body.classList.toggle('amoled-mode', darkMode && amoledMode);
     }
     const dt = $('#darkToggle');
     if (dt) dt.classList.toggle('active', darkMode);
-    document.body.style.background = darkMode ? '#0F0F1A' : '#F0EDF7';
+    const amt = $('#amoledToggle');
+    if (amt) amt.classList.toggle('active', amoledMode);
+    const bg = darkMode ? (amoledMode ? '#000000' : '#0F0F1A') : '#F0EDF7';
+    document.body.style.background = bg;
+    applyWallpaper();
+}
+
+function applyWallpaper() {
+    const area = $('#msgArea');
+    if (!area) return;
+    if (chatWallpaper) {
+        area.style.backgroundImage = 'url(' + chatWallpaper + ')';
+        area.style.backgroundSize = 'cover';
+        area.style.backgroundPosition = 'center';
+        area.style.backgroundAttachment = 'local';
+    } else {
+        area.style.backgroundImage = '';
+    }
 }
 
 function applyFontSize() {
@@ -690,7 +723,7 @@ function buildMainUI() {
                 <div class="pinned-bar-text" id="pinnedBarText"></div>
                 <span class="pinned-bar-close" id="pinnedBarClose"><i class="fas fa-times"></i></span>
             </div>
-            <div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
+            <div class="msg-area no-pinned-bar" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
             <button class="scroll-bottom-btn" id="scrollBottomBtn"><i class="fas fa-chevron-down"></i></button>
             <div class="input-container" id="inputContainer">
                 <div class="mention-suggestions hidden" id="mentionSuggestions"></div>
@@ -715,6 +748,18 @@ function buildMainUI() {
                     <div class="settings-row" id="darkRow">
                         <div class="settings-left"><div class="settings-icon" style="background:var(--surface);color:var(--text);"><i class="fas fa-moon"></i></div><span class="settings-text">Тёмная тема</span></div>
                         <div class="toggle" id="darkToggle"></div>
+                    </div>
+                    <div class="settings-row" id="amoledRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:#000;color:#fff;"><i class="fas fa-circle"></i></div><span class="settings-text">Чёрный AMOLED</span></div>
+                        <div class="toggle" id="amoledToggle"></div>
+                    </div>
+                    <div class="settings-row" id="accentRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(124,77,255,0.15);color:#7C4DFF;"><i class="fas fa-palette"></i></div><span class="settings-text">Цвет темы</span></div>
+                        <span class="settings-value" id="accentValue">Фиолетовый</span>
+                    </div>
+                    <div class="settings-row" id="wallpaperRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-image"></i></div><span class="settings-text">Обои чата</span></div>
+                        <span class="settings-value" id="wallpaperValue">По умолчанию</span>
                     </div>
                     <div class="settings-row" id="fontRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(59,130,246,0.15);color:#3B82F6;"><i class="fas fa-font"></i></div><span class="settings-text">Размер шрифта</span></div>
@@ -747,6 +792,10 @@ function buildMainUI() {
                     <div class="settings-row" id="privateProfileRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.15);color:var(--danger);"><i class="fas fa-user-shield"></i></div><span class="settings-text">Скрыть профиль из поиска</span></div>
                         <div class="toggle" id="privateProfileToggle"></div>
+                    </div>
+                    <div class="settings-row" id="storyForwardRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-share"></i></div><span class="settings-text">Разрешить пересылку моих историй</span></div>
+                        <div class="toggle" id="storyForwardToggle"></div>
                     </div>
                 </div>
 
@@ -807,7 +856,10 @@ function buildMainUI() {
     const lt = $('#lastSeenToggle'); if (lt) lt.classList.toggle('active', (currentProfile && currentProfile.lastSeenEnabled) !== false);
     const tt = $('#typingToggle'); if (tt) tt.classList.toggle('active', (currentProfile && currentProfile.typingIndicatorEnabled) !== false);
     const pt = $('#privateProfileToggle'); if (pt) pt.classList.toggle('active', !!(currentProfile && currentProfile.privateProfile));
+    const sft = $('#storyForwardToggle'); if (sft) sft.classList.toggle('active', (currentProfile && currentProfile.allowStoryForward) !== false);
     const fv = $('#fontValue'); if (fv) fv.textContent = { small: 'Мелкий', medium: 'Средний', large: 'Крупный' }[fontSize] || 'Средний';
+    const av = $('#accentValue'); if (av) av.textContent = { purple: 'Фиолетовый', blue: 'Синий', green: 'Зелёный', pink: 'Розовый', orange: 'Оранжевый', teal: 'Бирюзовый', red: 'Красный' }[accentTheme] || 'Фиолетовый';
+    const wv = $('#wallpaperValue'); if (wv) wv.textContent = chatWallpaper ? 'Своё изображение' : 'По умолчанию';
 
     setupListeners();
     setupViewportFix();
@@ -1402,6 +1454,35 @@ function openStoryViewer(uid) {
         render();
     }
 
+    const QUICK_EMOJIS = ['❤️', '😂', '😮', '😢', '👍', '🔥'];
+
+    function myReaction(story) {
+        const reactions = story.reactions || {};
+        for (const emoji in reactions) {
+            if ((reactions[emoji] || []).includes(currentUser.uid)) return emoji;
+        }
+        return null;
+    }
+
+    async function setStoryReaction(story, emoji) {
+        const reactions = story.reactions || {};
+        const current = myReaction(story);
+        // Remove any previous reaction of mine first — one reaction per
+        // story per person, like Telegram.
+        if (current && reactions[current]) {
+            reactions[current] = reactions[current].filter(u => u !== currentUser.uid);
+            if (!reactions[current].length) delete reactions[current];
+        }
+        if (current !== emoji) {
+            if (!reactions[emoji]) reactions[emoji] = [];
+            reactions[emoji].push(currentUser.uid);
+        }
+        story.reactions = reactions;
+        try {
+            await db.collection('stories').doc(story.id).update({ reactions: reactions });
+        } catch (e) { console.error('Story reaction error:', e); }
+    }
+
     function render() {
         clearTimeout(storyViewerTimer);
         const story = stories[idx];
@@ -1409,6 +1490,8 @@ function openStoryViewer(uid) {
 
         const isMine = uid === currentUser.uid;
         const viewerCount = (story.viewedBy || []).length;
+        const canForward = isMine || (u && u.allowStoryForward) !== false;
+        const myReact = myReaction(story);
 
         overlay.innerHTML =
             '<div class="story-progress-row">' +
@@ -1418,6 +1501,7 @@ function openStoryViewer(uid) {
             '<div class="avatar">' + (u && u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u ? u.displayName : '')) + '</div>' +
             '<span class="story-viewer-name">' + (u ? (u.displayName || 'Пользователь') : 'Пользователь') + '</span>' +
             '<span class="story-viewer-time">' + formatTime(toMillis(story.timestamp)) + '</span>' +
+            (canForward ? '<span class="story-viewer-forward" id="svForward"><i class="fas fa-share"></i></span>' : '') +
             '<span class="story-viewer-close" id="svClose"><i class="fas fa-times"></i></span>' +
             '</div>' +
             '<img class="story-viewer-img" src="' + story.imageUrl + '">' +
@@ -1429,7 +1513,11 @@ function openStoryViewer(uid) {
                     '<div class="story-viewers-btn" id="svViewers"><i class="fas fa-eye"></i> <span>' + viewerCount + '</span></div>' +
                     '<div class="story-delete-btn" id="svDelete"><i class="fas fa-trash"></i></div>' +
                     '</div>')
-                : '');
+                : ('<div class="story-reply-bar">' +
+                    '<input type="text" class="story-reply-input" id="svReplyInput" placeholder="Ответить...">' +
+                    '<div class="story-quick-heart' + (myReact ? ' reacted' : '') + '" id="svHeart">' + (myReact || '<i class="far fa-heart"></i>') + '</div>' +
+                    '<button class="story-reply-send" id="svReplySend"><i class="fas fa-paper-plane"></i></button>' +
+                    '</div>'));
 
         // Built via textContent (not string-concatenated into the HTML
         // above) so a caption can never inject markup into the overlay.
@@ -1445,6 +1533,16 @@ function openStoryViewer(uid) {
         overlay.querySelector('#svClose').onclick = close;
         overlay.querySelector('#svPrev').onclick = () => go(-1);
         overlay.querySelector('#svNext').onclick = () => go(1);
+
+        const fwdBtn = overlay.querySelector('#svForward');
+        if (fwdBtn) {
+            fwdBtn.onclick = (e) => {
+                e.stopPropagation();
+                clearTimeout(storyViewerTimer);
+                const ownerName = u ? (u.displayName || 'Пользователь') : 'Пользователь';
+                openForwardPicker({ id: story.id, text: story.caption || '', imageUrl: story.imageUrl }, ownerName);
+            };
+        }
 
         const delBtn = overlay.querySelector('#svDelete');
         if (delBtn) {
@@ -1470,6 +1568,76 @@ function openStoryViewer(uid) {
             };
         }
 
+        // Reply input: pauses the auto-advance timer while focused/typing
+        // so you don't get bumped to the next story mid-message, and
+        // sends a DM back to the story's owner with a story reference so
+        // it renders as a reply-to-story bubble in the chat.
+        const replyInput = overlay.querySelector('#svReplyInput');
+        const replySend = overlay.querySelector('#svReplySend');
+        if (replyInput) {
+            replyInput.onfocus = () => clearTimeout(storyViewerTimer);
+            replyInput.onblur = () => { if (!replyInput.value.trim()) storyViewerTimer = setTimeout(() => go(1), 5000); };
+            const send = async () => {
+                const text = replyInput.value.trim();
+                if (!text) return;
+                replyInput.value = '';
+                replyInput.disabled = true;
+                try {
+                    await sendStoryReply(uid, story, text);
+                    showCustomAlert('Ответ отправлен');
+                } catch (e) {
+                    showSendErrorModal(e);
+                } finally {
+                    replyInput.disabled = false;
+                    storyViewerTimer = setTimeout(() => go(1), 5000);
+                }
+            };
+            replyInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } };
+            if (replySend) replySend.onclick = (e) => { e.stopPropagation(); send(); };
+        }
+
+        // Heart quick-react (tap = react/un-react with ❤️) and a small
+        // long-press popup to pick a different emoji, like Telegram.
+        const heartBtn = overlay.querySelector('#svHeart');
+        if (heartBtn) {
+            let pressTimer = null;
+            let longPressed = false;
+            const openEmojiPopup = () => {
+                document.querySelectorAll('.story-quick-emoji-popup').forEach(p => p.remove());
+                const popup = document.createElement('div');
+                popup.className = 'story-quick-emoji-popup';
+                QUICK_EMOJIS.forEach(emoji => {
+                    const chip = document.createElement('span');
+                    chip.className = 'story-quick-emoji-popup-item';
+                    chip.textContent = emoji;
+                    chip.onclick = (e) => {
+                        e.stopPropagation();
+                        setStoryReaction(story, emoji);
+                        popup.remove();
+                        render();
+                    };
+                    popup.appendChild(chip);
+                });
+                heartBtn.appendChild(popup);
+                setTimeout(() => {
+                    document.addEventListener('click', function closeP(ev) {
+                        if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', closeP); }
+                    });
+                }, 50);
+            };
+            heartBtn.onpointerdown = () => {
+                longPressed = false;
+                pressTimer = setTimeout(() => { longPressed = true; openEmojiPopup(); }, 450);
+            };
+            heartBtn.onpointerup = (e) => {
+                clearTimeout(pressTimer);
+                if (longPressed) return;
+                e.stopPropagation();
+                setStoryReaction(story, '❤️').then(render);
+            };
+            heartBtn.onpointerleave = () => clearTimeout(pressTimer);
+        }
+
         if (uid !== currentUser.uid && !(story.viewedBy || []).includes(currentUser.uid)) {
             db.collection('stories').doc(story.id).update({
                 viewedBy: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)
@@ -1482,10 +1650,43 @@ function openStoryViewer(uid) {
     render();
 }
 
+// Sends a DM to the story owner referencing the story being replied to —
+// renders in chat as a normal message with a small "reply to story"
+// preview above it (same visual language as a normal message reply).
+async function sendStoryReply(ownerUid, story, text) {
+    const cid = chatIdFor(ownerUid);
+    const payload = {
+        text: text,
+        imageUrl: '',
+        fileName: '',
+        fileType: '',
+        fileUrl: '',
+        userId: currentUser.uid,
+        chatId: cid,
+        readBy: [],
+        replyTo: null,
+        reactions: {},
+        storyReply: { storyId: story.id, imageUrl: story.imageUrl || '', caption: story.caption || '' },
+        participants: [currentUser.uid, ownerUid],
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await db.collection('messages').add(payload);
+    if (!activeChats.has(ownerUid)) {
+        activeChats.add(ownerUid);
+        await loadChatPreview(ownerUid, cid);
+    }
+}
+
 // Bottom sheet listing who has viewed one of your own stories — like
-// Telegram/Instagram's "seen by" list.
+// Telegram/Instagram's "seen by" list. Shows each viewer's reaction next
+// to their name when they left one.
 function openStoryViewersList(story, onClose) {
     const viewers = story.viewedBy || [];
+    const reactions = story.reactions || {};
+    const reactionByUid = {};
+    for (const emoji in reactions) {
+        (reactions[emoji] || []).forEach(u => { reactionByUid[u] = emoji; });
+    }
 
     const overlay = document.createElement('div');
     overlay.className = 'action-sheet-overlay';
@@ -1503,7 +1704,10 @@ function openStoryViewersList(story, onClose) {
     if (viewers.length) {
         const list = document.createElement('div');
         list.className = 'tg-info-list';
-        viewers.forEach(vuid => {
+        // Whoever reacted shows up first, like Telegram — the reaction is
+        // the more interesting signal than a plain view.
+        const sorted = [...viewers].sort((a, b) => (reactionByUid[b] ? 1 : 0) - (reactionByUid[a] ? 1 : 0));
+        sorted.forEach(vuid => {
             const u = vuid === currentUser.uid ? currentProfile : allUsers[vuid];
             const row = document.createElement('div');
             row.className = 'member-row';
@@ -1524,6 +1728,12 @@ function openStoryViewersList(story, onClose) {
             info.appendChild(name);
             row.appendChild(avatarWrap);
             row.appendChild(info);
+            if (reactionByUid[vuid]) {
+                const reactEl = document.createElement('div');
+                reactEl.className = 'story-viewer-reaction-mark';
+                reactEl.textContent = reactionByUid[vuid];
+                row.appendChild(reactEl);
+            }
             list.appendChild(row);
         });
         sheet.appendChild(list);
@@ -1875,7 +2085,7 @@ function subscribe(cid) {
     // removes the double full-rebuild (once from the cache paint, once
     // from this "first" snapshot) that was flashing the whole chat every
     // time it was opened.
-    unsubscribeMessages = db.collection('messages').where('chatId', '==', cid).orderBy('timestamp', 'asc').limit(200).onSnapshot(snap => {
+    unsubscribeMessages = db.collection('messages').where('chatId', '==', cid).orderBy('timestamp', 'asc').limit(2000).onSnapshot(snap => {
         applyMessageChanges(snap.docChanges(), cid);
     }, err => {
         unsubscribeMessages = db.collection('messages').orderBy('timestamp', 'asc').limit(400).onSnapshot(snap2 => {
@@ -1924,7 +2134,19 @@ function applyMessageChanges(changes, cid) {
 
     if (area && !msgs.length) area.innerHTML = '';
 
-    changes.forEach(change => {
+    // The query is ascending, so Firestore already delivers 'added'
+    // changes oldest-first — this sort is just a safety net in case that
+    // ever isn't true (e.g. a future query-shape change), since the
+    // append loop below assumes each 'added' change is chronologically
+    // after everything before it. 'modified'/'removed' entries look up
+    // their message by id regardless of position, so leaving them in
+    // place is fine.
+    const sortedChanges = [...changes].sort((a, b) => {
+        if (a.type !== 'added' || b.type !== 'added') return 0;
+        return toMillis(a.doc.data().timestamp) - toMillis(b.doc.data().timestamp);
+    });
+
+    sortedChanges.forEach(change => {
         const id = change.doc.id;
         const data = { id, ...change.doc.data() };
         const idx = msgs.findIndex(x => x.id === id);
@@ -2253,6 +2475,22 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         bubble.appendChild(fwdBlock);
     }
 
+    if (m.storyReply) {
+        const srBlock = document.createElement('div');
+        srBlock.className = 'msg-story-reply-block';
+        if (m.storyReply.imageUrl) {
+            const thumb = document.createElement('img');
+            thumb.className = 'msg-story-reply-thumb';
+            thumb.src = m.storyReply.imageUrl;
+            srBlock.appendChild(thumb);
+        }
+        const srText = document.createElement('div');
+        srText.className = 'msg-story-reply-text';
+        srText.textContent = 'Ответ на историю';
+        srBlock.appendChild(srText);
+        bubble.appendChild(srBlock);
+    }
+
     if (m.replyTo) {
         const replyBlock = document.createElement('div');
         replyBlock.className = 'msg-reply-block';
@@ -2289,7 +2527,12 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         const img = document.createElement('img');
         img.src = m.imageUrl;
         img.className = 'msg-img';
-        img.onclick = function (e) { e.stopPropagation(); viewFull(m.imageUrl); };
+        img.onclick = function (e) {
+            e.stopPropagation();
+            const chatImgs = (messageCache[cid] || []).filter(x => x.imageUrl);
+            const idx = chatImgs.findIndex(x => x.id === m.id);
+            viewFull(m.imageUrl, chatImgs.map(x => x.imageUrl), idx);
+        };
         bubble.appendChild(img);
     }
 
@@ -2627,6 +2870,15 @@ async function sendMsg() {
 
         await db.collection('messages').add(payload);
 
+        if (sendBtn) {
+            sendBtn.classList.remove('sent-pulse');
+            // Force a reflow so re-adding the class restarts the animation
+            // even if the previous pulse hadn't finished yet.
+            void sendBtn.offsetWidth;
+            sendBtn.classList.add('sent-pulse');
+            setTimeout(() => sendBtn.classList.remove('sent-pulse'), 400);
+        }
+
         // We just sent a message — stop announcing "typing..." right away.
         clearTyping(cid);
 
@@ -2646,10 +2898,31 @@ async function sendMsg() {
         }
     } catch (e) {
         console.error('Send error:', e);
+        showSendErrorModal(e);
     } finally {
         const sendBtn2 = $('#sendBtn');
         if (sendBtn2) sendBtn2.disabled = false;
     }
+}
+
+// Turns a raw Firestore error into a message people can actually act on —
+// the two real failure modes here are the free-tier daily quota being
+// exhausted, and a single message (usually a photo, since images are
+// stored inline as base64) going over Firestore's ~1MB per-document limit.
+function showSendErrorModal(e) {
+    const code = e && e.code;
+    const msg = (e && e.message) || '';
+    let text;
+    if (code === 'resource-exhausted') {
+        text = 'Достигнут дневной лимит бесплатного тарифа Firebase на этот проект. Отправка сообщений вернётся, когда лимит сбросится (обычно в течение суток) — прямо сейчас ничего не откроется и не очистится вручную.';
+    } else if (code === 'invalid-argument' || /longer than|exceeds the maximum|1048487/i.test(msg)) {
+        text = 'Это сообщение слишком большое для отправки (обычно из-за фото). Попробуйте фото поменьше или более короткий текст.';
+    } else if (code === 'permission-denied') {
+        text = 'Нет прав на отправку сообщения в этот чат.';
+    } else {
+        text = 'Не удалось отправить сообщение. Проверьте соединение и попробуйте ещё раз.';
+    }
+    showCustomAlert(text);
 }
 
 // ==================== FORWARD ====================
@@ -2665,6 +2938,87 @@ function computeParticipants(targetId) {
         return [...new Set([...members, ...admins])];
     }
     return [currentUser.uid, targetId];
+}
+
+// ==================== THEME PICKER ====================
+function openThemePicker() {
+    const names = { purple: 'Фиолетовый', blue: 'Синий', green: 'Зелёный', pink: 'Розовый', orange: 'Оранжевый', teal: 'Бирюзовый', red: 'Красный' };
+
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet';
+
+    const title = document.createElement('div');
+    title.className = 'story-viewers-title';
+    title.textContent = 'Цвет темы';
+    sheet.appendChild(title);
+
+    const row = document.createElement('div');
+    row.className = 'theme-swatch-row';
+    ACCENT_THEMES.forEach(t => {
+        const sw = document.createElement('div');
+        sw.className = 'theme-swatch' + (accentTheme === t ? ' active' : '');
+        sw.style.background = ACCENT_COLORS[t];
+        sw.title = names[t];
+        if (accentTheme === t) sw.innerHTML = '<i class="fas fa-check"></i>';
+        sw.onclick = () => {
+            accentTheme = t;
+            localStorage.setItem('quark_accent', t);
+            applyTheme();
+            const av = $('#accentValue');
+            if (av) av.textContent = names[t];
+            overlay.remove();
+        };
+        row.appendChild(sw);
+    });
+    sheet.appendChild(row);
+
+    overlay.appendChild(sheet);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+}
+
+// ==================== CHAT WALLPAPER ====================
+function openWallpaperPicker() {
+    showActionSheet([
+        {
+            label: 'Выбрать из галереи',
+            icon: 'fa-image',
+            onClick: () => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                input.onchange = async () => {
+                    const file = input.files[0];
+                    if (!file) return;
+                    try {
+                        const dataUrl = await compressWallpaper(file);
+                        chatWallpaper = dataUrl;
+                        localStorage.setItem('quark_wallpaper', dataUrl);
+                        applyWallpaper();
+                        const wv = $('#wallpaperValue');
+                        if (wv) wv.textContent = 'Своё изображение';
+                    } catch (e) {
+                        showCustomAlert('Не удалось установить обои');
+                    }
+                };
+                input.click();
+            }
+        },
+        {
+            label: 'Сбросить обои',
+            icon: 'fa-undo',
+            danger: true,
+            onClick: () => {
+                chatWallpaper = null;
+                localStorage.removeItem('quark_wallpaper');
+                applyWallpaper();
+                const wv = $('#wallpaperValue');
+                if (wv) wv.textContent = 'По умолчанию';
+            }
+        }
+    ]);
 }
 
 // Bottom sheet listing every chat you can forward into: your DMs, your
@@ -2755,8 +3109,36 @@ async function forwardMessageTo(targetId, msg, originName) {
         renderChatList();
     } catch (e) {
         console.error('Forward error:', e);
-        showCustomAlert('Не удалось переслать сообщение');
+        showSendErrorModal(e);
     }
+}
+
+function compressWallpaper(file) {
+    return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let w = img.width;
+                let h = img.height;
+                const max = 1080;
+                if (w > h && w > max) {
+                    h *= max / w;
+                    w = max;
+                } else if (h > max) {
+                    w *= max / h;
+                    h = max;
+                }
+                canvas.width = w;
+                canvas.height = h;
+                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                resolve(canvas.toDataURL('image/jpeg', 0.7));
+            };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
 }
 
 function compressFile(file) {
@@ -2787,16 +3169,155 @@ function compressFile(file) {
     });
 }
 
-function viewFull(url) {
+function viewFull(url, list, index) {
+    list = (list && list.length) ? list : [url];
+    index = typeof index === 'number' && index > -1 ? index : Math.max(0, list.indexOf(url));
+
     const viewer = document.createElement('div');
     viewer.className = 'full-viewer';
-    viewer.innerHTML = '<span class="full-viewer-close">✕</span><img src="' + url + '">';
-    viewer.onclick = e => {
-        if (e.target === viewer || e.target.classList.contains('full-viewer-close')) {
-            viewer.remove();
-        }
-    };
+    viewer.innerHTML =
+        '<div class="fv-top">' +
+        '<span class="fv-close"><i class="fas fa-times"></i></span>' +
+        '<span class="fv-counter">' + (list.length > 1 ? (index + 1) + ' / ' + list.length : '') + '</span>' +
+        '<a class="fv-download" download="photo.jpg"><i class="fas fa-download"></i></a>' +
+        '</div>' +
+        '<div class="fv-stage"><img class="fv-img" src="' + list[index] + '"></div>' +
+        (list.length > 1 ? '<div class="fv-nav fv-prev"><i class="fas fa-chevron-left"></i></div><div class="fv-nav fv-next"><i class="fas fa-chevron-right"></i></div>' : '');
     document.body.appendChild(viewer);
+
+    const img = viewer.querySelector('.fv-img');
+    const stage = viewer.querySelector('.fv-stage');
+    const counter = viewer.querySelector('.fv-counter');
+    const download = viewer.querySelector('.fv-download');
+    download.href = list[index];
+
+    let scale = 1, tx = 0, ty = 0;
+    let startDist = 0, startScale = 1;
+    let dragging = false, dragStartX = 0, dragStartY = 0, dragOrigX = 0, dragOrigY = 0;
+    let lastTap = 0;
+    let touchStartX = 0, touchStartY = 0, singleTouchActive = false;
+
+    const keyHandler = (e) => {
+        if (e.key === 'Escape') close();
+        else if (e.key === 'ArrowLeft') goTo(index - 1);
+        else if (e.key === 'ArrowRight') goTo(index + 1);
+    };
+    document.addEventListener('keydown', keyHandler);
+    function close() {
+        document.removeEventListener('keydown', keyHandler);
+        viewer.remove();
+    }
+
+    function applyTransform() {
+        img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+    }
+    function resetZoom() { scale = 1; tx = 0; ty = 0; applyTransform(); }
+
+    function goTo(newIndex) {
+        if (newIndex < 0 || newIndex >= list.length || newIndex === index) return;
+        index = newIndex;
+        img.src = list[index];
+        download.href = list[index];
+        if (counter) counter.textContent = list.length > 1 ? (index + 1) + ' / ' + list.length : '';
+        resetZoom();
+    }
+
+    viewer.querySelector('.fv-close').onclick = close;
+    const prevBtn = viewer.querySelector('.fv-prev');
+    const nextBtn = viewer.querySelector('.fv-next');
+    if (prevBtn) prevBtn.onclick = (e) => { e.stopPropagation(); goTo(index - 1); };
+    if (nextBtn) nextBtn.onclick = (e) => { e.stopPropagation(); goTo(index + 1); };
+
+    // Pinch-to-zoom, drag-to-pan when zoomed in, swipe left/right between
+    // photos and swipe down to close when at 1x — mirrors Telegram's photo
+    // viewer gestures.
+    stage.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+            startDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            startScale = scale;
+            singleTouchActive = false;
+        } else if (e.touches.length === 1) {
+            if (scale > 1.02) {
+                dragging = true;
+                dragStartX = e.touches[0].clientX;
+                dragStartY = e.touches[0].clientY;
+                dragOrigX = tx;
+                dragOrigY = ty;
+            } else {
+                singleTouchActive = true;
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            }
+        }
+    }, { passive: true });
+
+    stage.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 2 && startDist) {
+            const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            scale = Math.min(4, Math.max(1, startScale * (dist / startDist)));
+            applyTransform();
+        } else if (dragging && e.touches.length === 1) {
+            tx = dragOrigX + (e.touches[0].clientX - dragStartX);
+            ty = dragOrigY + (e.touches[0].clientY - dragStartY);
+            applyTransform();
+        }
+    }, { passive: true });
+
+    stage.addEventListener('touchend', (e) => {
+        const t = e.changedTouches[0];
+        if (singleTouchActive && t) {
+            const dx = t.clientX - touchStartX;
+            const dy = t.clientY - touchStartY;
+            if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+                if (dx < 0) goTo(index + 1); else goTo(index - 1);
+            } else if (dy > 110 && Math.abs(dy) > Math.abs(dx) * 1.4) {
+                close();
+                return;
+            } else {
+                const now = Date.now();
+                if (now - lastTap < 300) {
+                    if (scale > 1.02) resetZoom(); else { scale = 2.5; applyTransform(); }
+                }
+                lastTap = now;
+            }
+        }
+        singleTouchActive = false;
+        dragging = false;
+        startDist = 0;
+        if (scale < 1.02) resetZoom();
+    });
+
+    // Desktop: wheel to zoom, double-click to zoom, drag to pan when zoomed
+    stage.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        scale = Math.min(4, Math.max(1, scale - e.deltaY * 0.0025));
+        if (scale < 1.02) resetZoom(); else applyTransform();
+    }, { passive: false });
+
+    stage.addEventListener('dblclick', () => {
+        if (scale > 1.02) resetZoom(); else { scale = 2.5; applyTransform(); }
+    });
+
+    let mouseDown = false;
+    stage.addEventListener('mousedown', (e) => {
+        if (scale <= 1.02) return;
+        mouseDown = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragOrigX = tx;
+        dragOrigY = ty;
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (!mouseDown) return;
+        tx = dragOrigX + (e.clientX - dragStartX);
+        ty = dragOrigY + (e.clientY - dragStartY);
+        applyTransform();
+    });
+    window.addEventListener('mouseup', () => { mouseDown = false; });
+
+    viewer.onclick = (e) => {
+        if (e.target === viewer || e.target === stage) close();
+    };
 }
 
 // ==================== MARK AS READ ====================
@@ -2939,10 +3460,12 @@ function watchPinned(cid) {
 function renderPinnedBar() {
     const bar = $('#pinnedBar');
     const text = $('#pinnedBarText');
+    const area = $('#msgArea');
     if (!bar || !text) return;
 
     if (!currentPinnedList.length) {
         bar.classList.add('hidden');
+        if (area) area.classList.add('no-pinned-bar');
         return;
     }
 
@@ -2951,6 +3474,7 @@ function renderPinnedBar() {
     const msg = (messageCache[cid] || []).find(x => x.id === msgId);
     text.textContent = msg ? (msg.imageUrl ? 'Фото' : (msg.text || 'Сообщение')).substring(0, 60) : 'Закреплённое сообщение';
     bar.classList.remove('hidden');
+    if (area) area.classList.remove('no-pinned-bar');
 
     bar.onclick = function (e) {
         if (e.target.closest('#pinnedBarClose')) return;
@@ -3260,11 +3784,12 @@ async function renderProfileMedia(container, cid) {
         container.innerHTML = '<div class="section-label" style="margin-left:16px;">Медиа</div>';
         const grid = document.createElement('div');
         grid.className = 'tg-media-grid';
-        imgs.slice(0, 30).forEach(url => {
+        const gridImgs = imgs.slice(0, 30);
+        gridImgs.forEach((url, i) => {
             const thumb = document.createElement('div');
             thumb.className = 'tg-media-thumb';
             thumb.innerHTML = '<img src="' + url + '">';
-            thumb.onclick = () => viewFull(url);
+            thumb.onclick = () => viewFull(url, gridImgs, i);
             grid.appendChild(thumb);
         });
         container.appendChild(grid);
@@ -3797,6 +4322,21 @@ function setupScrollToBottomBtn() {
     };
 }
 
+// The open-chat header floats over the message list (see #screenMessages
+// > .header in style.css), so the message list needs to know exactly how
+// tall the header currently is to pad itself clear of it. A
+// ResizeObserver keeps that in sync automatically — the header's height
+// isn't fixed, since the typing indicator adds a second line sometimes.
+function setupChatHeaderHeightSync() {
+    const header = document.querySelector('#screenMessages > .header');
+    if (!header || !window.ResizeObserver) return;
+    const ro = new ResizeObserver(() => {
+        const h = header.offsetHeight;
+        if (h > 0) document.documentElement.style.setProperty('--chat-header-h', h + 'px');
+    });
+    ro.observe(header);
+}
+
 function setupListeners() {
     $$('.nav-item, .dt-nav-btn').forEach(n => n.onclick = () => showScreen(n.dataset.sc));
     $('#backBtn').onclick = () => showScreen('screenChats');
@@ -3805,6 +4345,7 @@ function setupListeners() {
     $('#newChatBtn').onclick = showCreateChatMenu;
     setupStoriesHideOnScroll();
     setupScrollToBottomBtn();
+    setupChatHeaderHeightSync();
 
     const pinnedBarClose = $('#pinnedBarClose');
     if (pinnedBarClose) {
@@ -3895,6 +4436,18 @@ function setupListeners() {
         if (fv) fv.textContent = { small: 'Мелкий', medium: 'Средний', large: 'Крупный' }[fontSize];
     };
 
+    const amoledToggleFn = e => {
+        if (e) e.stopPropagation();
+        amoledMode = !amoledMode;
+        localStorage.setItem('quark_amoled', amoledMode ? '1' : '0');
+        applyTheme();
+    };
+    $('#amoledRow').onclick = amoledToggleFn;
+    $('#amoledToggle').onclick = amoledToggleFn;
+
+    $('#accentRow').onclick = openThemePicker;
+    $('#wallpaperRow').onclick = openWallpaperPicker;
+
     const scaleUpBtn = $('#scaleUpBtn');
     if (scaleUpBtn) scaleUpBtn.onclick = () => {
         const i = DESKTOP_SCALES.indexOf(desktopScale);
@@ -3966,6 +4519,16 @@ function setupListeners() {
     }
     $('#privateProfileRow').onclick = togglePrivateProfile;
     $('#privateProfileToggle').onclick = e => { e.stopPropagation(); togglePrivateProfile(); };
+
+    function toggleStoryForward() {
+        const enabled = !((currentProfile && currentProfile.allowStoryForward) !== false);
+        currentProfile.allowStoryForward = enabled;
+        db.collection('users').doc(currentUser.uid).update({ allowStoryForward: enabled }).catch(() => {});
+        const sft = $('#storyForwardToggle');
+        if (sft) sft.classList.toggle('active', enabled);
+    }
+    $('#storyForwardRow').onclick = toggleStoryForward;
+    $('#storyForwardToggle').onclick = e => { e.stopPropagation(); toggleStoryForward(); };
 
     $('#clearCacheRow').onclick = () => {
         showCustomConfirm('Очистить локальный кэш сообщений? Приложение перезагрузится.', () => {
