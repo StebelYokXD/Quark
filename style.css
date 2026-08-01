@@ -48,12 +48,14 @@ html {
     height: 100%;
     width: 100%;
     overflow: hidden;
+    overscroll-behavior: none;
 }
 
 body {
     height: 100%;
     width: 100%;
     overflow: hidden;
+    overscroll-behavior: none;
     font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
     background: var(--bg);
     color: var(--text);
@@ -334,6 +336,7 @@ body {
 .chat-scroll {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: calc(4px * var(--ui-scale, 1)) 0;
 }
 
@@ -467,6 +470,7 @@ body {
 .msg-area {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: calc(10px * var(--ui-scale, 1)) calc(14px * var(--ui-scale, 1));
     display: flex;
     flex-direction: column;
@@ -748,6 +752,18 @@ body {
 
 .mcm-action-btn.danger {
     color: var(--danger);
+}
+
+.msg-views {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-right: 5px;
+    opacity: 0.85;
+}
+
+.msg-views i {
+    font-size: 0.85em;
 }
 
 .verified-badge {
@@ -2442,6 +2458,9 @@ body {
     border-bottom: 1px solid var(--glass-border);
     background: var(--surface);
     flex-shrink: 0;
+    max-height: 26vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .comments-post-preview .avatar {
@@ -2485,7 +2504,9 @@ body {
 
 .comments-list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: calc(12px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
     display: flex;
     flex-direction: column;

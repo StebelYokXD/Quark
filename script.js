@@ -117,6 +117,7 @@ function msgVisualsEqual(a, b) {
         a.fileName === b.fileName &&
         a.replyTo === b.replyTo &&
         (a.commentCount || 0) === (b.commentCount || 0) &&
+        (a.viewedBy || []).length === (b.viewedBy || []).length &&
         JSON.stringify(a.reactions || {}) === JSON.stringify(b.reactions || {}) &&
         JSON.stringify(a.readBy || []) === JSON.stringify(b.readBy || []);
 }
@@ -1337,6 +1338,7 @@ function openStoryComposer(dataUrl, progress, onDone) {
     const vv = window.visualViewport;
     function fitToViewport() {
         overlay.style.height = vv.height + 'px';
+        overlay.style.top = vv.offsetTop + 'px';
         window.scrollTo(0, 0);
     }
     if (vv) {
@@ -1564,6 +1566,7 @@ function openPostComments(msg, cid) {
     const vv = window.visualViewport;
     function fitCommentsToViewport() {
         overlay.style.height = vv.height + 'px';
+        overlay.style.top = vv.offsetTop + 'px';
         window.scrollTo(0, 0);
     }
     if (vv) {
@@ -1745,6 +1748,31 @@ function updateComposerAvailability(id) {
     if (!row || !lockedNote) return;
 
     const meta = allChats[id];
+    if (!meta && !isGroupLike(id)) {
+        // Definitely a DM, not a channel — posting is always allowed there.
+        row.classList.remove('hidden');
+        lockedNote.classList.add('hidden');
+        lockedNote.innerHTML = '';
+        return;
+    }
+    if (!meta) {
+        // isGroupLike(id) said this IS a group/channel id, but its data
+        // hasn't synced into allChats yet (e.g. a channel you just
+        // subscribed to that you'd never loaded before) — don't guess:
+        // hide the composer until we actually know whether posting is
+        // allowed, instead of defaulting to "yes" and showing a real
+        // input box to someone who isn't an admin.
+        row.classList.add('hidden');
+        lockedNote.classList.add('hidden');
+        db.collection('chats').doc(id).get().then(doc => {
+            if (doc.exists) {
+                allChats[id] = { id: doc.id, ...doc.data() };
+                if (chatIdFor(currentChat) === chatIdFor(id) || currentChat === id) updateComposerAvailability(id);
+            }
+        }).catch(() => {});
+        return;
+    }
+
     const isChannel = !!(meta && meta.type === 'channel');
     const isMember = !isChannel || (meta.members || []).includes(currentUser.uid);
     const isAdmin = isChannel && (meta.admins || []).includes(currentUser.uid);
@@ -2147,16 +2175,16 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         showMessageMenu(m, wrapper, cid, isMine, isChannel);
     });
 
-    // In group chats (and always in channels), show the sender's avatar
-    // next to received messages, like Telegram. Consecutive messages from
-    // the same sender only show the avatar on the last one, but a
-    // same-size invisible slot is kept for the earlier ones so every
-    // bubble still lines up. Channel posts use the channel's own identity
-    // instead of whichever admin actually wrote them.
-    const channelMeta = isChannel ? (allChats[cid] || {}) : null;
-    if (groupChat && !isMine) {
-        const senderName = isChannel ? (channelMeta.name || 'Канал') : (allUsers[m.userId] ? allUsers[m.userId].displayName : '');
-        const senderAvatar = isChannel ? channelMeta.avatarUrl : (allUsers[m.userId] && allUsers[m.userId].avatarUrl);
+    // In group chats, show the sender's avatar next to received messages,
+    // like Telegram. Consecutive messages from the same sender only show
+    // the avatar on the last one, but a same-size invisible slot is kept
+    // for the earlier ones so every bubble still lines up. Channels are
+    // deliberately excluded — a channel post shows only the message,
+    // comments, reactions and view count, no channel identity on each post.
+    const channelMeta = isChannel ? (allChats[cid] || {}) : null; // still used further down for the comments pill / view count
+    if (groupChat && !isMine && !isChannel) {
+        const senderName = allUsers[m.userId] ? allUsers[m.userId].displayName : '';
+        const senderAvatar = allUsers[m.userId] && allUsers[m.userId].avatarUrl;
         const avatarEl = document.createElement('div');
         avatarEl.className = 'msg-avatar' + (showAvatar ? '' : ' msg-avatar-hidden');
         if (showAvatar) {
@@ -2164,7 +2192,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
             avatarEl.style.cursor = 'pointer';
             avatarEl.onclick = function (e) {
                 e.stopPropagation();
-                if (isChannel) showChatInfo(cid); else viewUserProfile(m.userId);
+                viewUserProfile(m.userId);
             };
         }
         wrapper.appendChild(avatarEl);
@@ -2181,12 +2209,12 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     }
 
     // In group chats, label who sent each received message (skipped for
-    // DMs where it would be redundant). Channels always show the channel
-    // name as the label, same as the avatar above.
-    if (groupChat && !isMine) {
+    // DMs where it would be redundant, and for channels which show no
+    // identity on posts at all).
+    if (groupChat && !isMine && !isChannel) {
         const label = document.createElement('div');
         label.className = 'sender-name-label';
-        label.textContent = isChannel ? (channelMeta.name || 'Канал') : (allUsers[m.userId] ? (allUsers[m.userId].displayName || 'Пользователь') : 'Пользователь');
+        label.textContent = allUsers[m.userId] ? (allUsers[m.userId].displayName || 'Пользователь') : 'Пользователь';
         bubble.appendChild(label);
     }
 
@@ -2242,6 +2270,38 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
 
     const showReadTicks = isMine && !groupChat;
 
+    // Time + read ticks (DMs) or view count (channel posts) — shared by
+    // both the text and the no-text/image-only bubble layouts below.
+    function buildTimeSpan() {
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'msg-time';
+        timeSpan.style.flexShrink = '0';
+        timeSpan.style.textAlign = 'right';
+        if (isChannel) {
+            const views = document.createElement('span');
+            views.className = 'msg-views';
+            views.innerHTML = '<i class="fas fa-eye"></i> ' + (m.viewedBy || []).length;
+            timeSpan.appendChild(views);
+        }
+        const timeText = document.createElement('span');
+        timeText.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        timeSpan.appendChild(timeText);
+
+        if (showReadTicks) {
+            const isRead = m.readBy && m.readBy.length > 0;
+            const check = document.createElement('span');
+            check.style.cssText = 'font-size:10px;margin-left:2px;color:' + (isRead ? 'var(--primary)' : 'var(--text-secondary)');
+            check.textContent = isRead ? '✓✓' : '✓';
+            timeSpan.appendChild(check);
+        } else if (isMine && !isChannel) {
+            const check = document.createElement('span');
+            check.style.cssText = 'font-size:10px;margin-left:2px;color:var(--text-secondary)';
+            check.textContent = '✓';
+            timeSpan.appendChild(check);
+        }
+        return timeSpan;
+    }
+
     if (m.text) {
         const row = document.createElement('div');
         row.style.display = 'flex';
@@ -2255,47 +2315,14 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         txt.style.minWidth = '0';
         row.appendChild(txt);
 
-        const timeSpan = document.createElement('span');
-        timeSpan.className = 'msg-time';
-        timeSpan.style.flexShrink = '0';
+        const timeSpan = buildTimeSpan();
         timeSpan.style.minWidth = '35px';
-        timeSpan.style.textAlign = 'right';
-        timeSpan.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
-        if (showReadTicks) {
-            const isRead = m.readBy && m.readBy.length > 0;
-            const check = document.createElement('span');
-            check.style.cssText = 'font-size:10px;margin-left:2px;color:' + (isRead ? 'var(--primary)' : 'var(--text-secondary)');
-            check.textContent = isRead ? '✓✓' : '✓';
-            timeSpan.appendChild(check);
-        } else if (isMine) {
-            const check = document.createElement('span');
-            check.style.cssText = 'font-size:10px;margin-left:2px;color:var(--text-secondary)';
-            check.textContent = '✓';
-            timeSpan.appendChild(check);
-        }
         row.appendChild(timeSpan);
         bubble.appendChild(row);
     } else {
         const timeRow = document.createElement('div');
         timeRow.style.textAlign = 'right';
-        const timeSpan = document.createElement('span');
-        timeSpan.className = 'msg-time';
-        timeSpan.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
-        if (showReadTicks) {
-            const isRead = m.readBy && m.readBy.length > 0;
-            const check = document.createElement('span');
-            check.style.cssText = 'font-size:10px;margin-left:2px;color:' + (isRead ? 'var(--primary)' : 'var(--text-secondary)');
-            check.textContent = isRead ? '✓✓' : '✓';
-            timeSpan.appendChild(check);
-        } else if (isMine) {
-            const check = document.createElement('span');
-            check.style.cssText = 'font-size:10px;margin-left:2px;color:var(--text-secondary)';
-            check.textContent = '✓';
-            timeSpan.appendChild(check);
-        }
-        timeRow.appendChild(timeSpan);
+        timeRow.appendChild(buildTimeSpan());
         bubble.appendChild(timeRow);
     }
 
@@ -2351,7 +2378,7 @@ const ALL_REACTIONS = [
     '😎', '🥳', '🎉', '🎊', '👏', '🙏', '🤝', '💪',
     '✌️', '🤞', '🤟', '👌', '💯', '💔', '💕', '💞',
     '🥺', '🤯', '😳', '🙄', '😏', '😒', '🤡', '💀',
-    '👀', '🍾', '🌚', '🤝‍', '⚡', '✨', '💩', '🤮'
+    '👀', '🍾', '🌚', '🎯', '⚡', '✨', '💩', '🤮'
 ];
 
 function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
@@ -2749,18 +2776,26 @@ function viewFull(url) {
 // actually got written. We now just filter the chat's already-loaded
 // messages in memory, which needs no extra index at all.
 async function markRead(cid) {
-    if (!currentUser || !readReceiptsEnabled) return;
+    if (!currentUser) return;
     const msgs = messageCache[cid];
     if (!msgs || !msgs.length) return;
+    const meta = allChats[currentChat];
+    const isChannel = !!(meta && meta.type === 'channel');
+    // Channel posts always count views (it's a public engagement number,
+    // like Telegram) — only DM/group read receipts respect the privacy
+    // toggle.
+    if (!isChannel && !readReceiptsEnabled) return;
+    const field = isChannel ? 'viewedBy' : 'readBy';
     try {
         const batch = db.batch();
         let any = false;
         msgs.forEach(m => {
-            if (m.userId === currentUser.uid) return;
-            const readBy = m.readBy || [];
-            if (!readBy.includes(currentUser.uid)) {
-                readBy.push(currentUser.uid);
-                batch.update(db.collection('messages').doc(m.id), { readBy: readBy });
+            if (!isChannel && m.userId === currentUser.uid) return;
+            const arr = m[field] || [];
+            if (!arr.includes(currentUser.uid)) {
+                const next = [...arr, currentUser.uid];
+                m[field] = next;
+                batch.update(db.collection('messages').doc(m.id), { [field]: next });
                 any = true;
             }
         });
@@ -2849,9 +2884,16 @@ function watchPinned(cid) {
 
     unsubscribePinned = db.collection('chatMeta').doc(cid).onSnapshot(doc => {
         const data = doc.exists ? doc.data() : null;
-        currentPinnedList = (data && data.pinnedMessages) || [];
+        const newList = (data && data.pinnedMessages) || [];
+        // Show the newest pin by default (like Telegram) — a freshly pinned
+        // message jumps the bar to it; otherwise just keep the index valid.
+        if (newList.length > currentPinnedList.length) {
+            pinnedShownIndex = newList.length - 1;
+        } else if (pinnedShownIndex >= newList.length) {
+            pinnedShownIndex = Math.max(0, newList.length - 1);
+        }
+        currentPinnedList = newList;
         currentPinnedIds = new Set(currentPinnedList);
-        if (pinnedShownIndex >= currentPinnedList.length) pinnedShownIndex = Math.max(0, currentPinnedList.length - 1);
         renderPinnedBar();
         // Pin badges on already-rendered bubbles need a repaint too.
         if (chatIdFor(currentChat) === cid) renderFromCache(cid);
@@ -3116,7 +3158,7 @@ async function renderFeaturedChannelCard(profileOwner, container) {
         '<div class="avatar">' + (chat.avatarUrl ? '<img src="' + chat.avatarUrl + '">' : initials(chat.name)) + '</div>' +
         '<div class="member-row-info"><div class="member-row-name">' + (chat.name || 'Канал') + '</div>' +
         '<div class="member-row-sub">' + (chat.username ? '@' + chat.username + ' &middot; ' : '') + (chat.members || []).length + ' подписчиков</div></div>' +
-        (isMember ? '' : '<button class="btn btn-primary" id="vpChannelJoinBtn" style="width:auto;padding:8px 14px;font-size:13px;margin:0;">Подписаться</button>') +
+        '<button class="btn ' + (isMember ? 'btn-secondary' : 'btn-primary') + '" id="vpChannelJoinBtn" style="width:auto;padding:8px 14px;font-size:13px;margin:0;">' + (isMember ? 'Отписаться' : 'Подписаться') + '</button>' +
         '</div></div>';
 
     const row = container.querySelector('#vpChannelRow');
@@ -3125,10 +3167,32 @@ async function renderFeaturedChannelCard(profileOwner, container) {
     if (joinBtn) {
         joinBtn.onclick = async (e) => {
             e.stopPropagation();
-            await db.collection('chats').doc(chat.id).update({
-                members: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)
-            });
-            openChat(chat.id);
+            // Toggle in place (like Telegram's profile channel card) rather
+            // than jumping into the channel — the button itself becomes
+            // "Отписаться" once subscribed, no navigation involved. This
+            // also sidesteps a real bug that navigating caused: right
+            // after subscribing, the local allChats cache for a channel
+            // you'd never been a member of hadn't synced yet, so
+            // updateComposerAvailability() misread the missing entry as
+            // "not a channel" and showed a real post box to a non-admin.
+            joinBtn.disabled = true;
+            try {
+                if (isMember) {
+                    await db.collection('chats').doc(chat.id).update({
+                        members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid),
+                        admins: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)
+                    });
+                    chat.members = (chat.members || []).filter(u => u !== currentUser.uid);
+                    activeChats.delete(chat.id);
+                } else {
+                    await db.collection('chats').doc(chat.id).update({
+                        members: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)
+                    });
+                    chat.members = [...new Set([...(chat.members || []), currentUser.uid])];
+                }
+            } catch (err) { console.error('Channel subscribe toggle error:', err); }
+            renderChatList();
+            renderFeaturedChannelCard(profileOwner, container);
         };
     }
 }
