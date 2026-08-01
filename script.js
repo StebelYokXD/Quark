@@ -537,6 +537,7 @@ function teardownSession() {
     currentChat = null;
     messageCache = {};
     renderedMsgIds = {};
+    chatListRowSig = {};
     lastMessageTimes = {};
     unreadCounts = {};
 }
@@ -1100,50 +1101,88 @@ async function loadChatPreview(id, cid) {
 }
 
 // ==================== CHAT LIST ====================
+// cid -> signature string of what was last rendered for that row, so an
+// unrelated update (e.g. a reaction added in a different chat) doesn't
+// touch rows whose visible content hasn't actually changed.
+let chatListRowSig = {};
+
+function buildChatRow(id, isGroup, meta) {
+    const name = isGroup ? (meta.name || 'Чат') : (meta.displayName || 'Пользователь');
+    const avatarUrl = meta.avatarUrl || '';
+    const unread = unreadCounts[id] || 0;
+    const preview = lastMessagePreviews[id] || '';
+    const time = lastMessageTimes[id] || 0;
+
+    let badge = '';
+    if (id === GENERAL_CHAT_ID) badge = '<span class="chat-badge">общий</span>';
+
+    const online = !isGroup && isUserOnline(meta) && canShowLastSeen(meta);
+
+    const div = document.createElement('div');
+    div.className = 'chat-item';
+    div.dataset.cid = id;
+    div.innerHTML =
+        '<div class="avatar-wrap"><div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' + (online ? '<span class="online-dot"></span>' : '') + '</div>' +
+        '<div class="chat-info">' +
+        '<div class="chat-name">' + name + (isGroup ? '' : verifiedBadge(meta.verified)) + badge + '</div>' +
+        '<div class="chat-preview">' + preview + '</div>' +
+        '</div>' +
+        '<div class="chat-meta">' +
+        '<div class="chat-time">' + formatTime(time) + '</div>' +
+        (unread > 0 ? '<div style="background:var(--primary);color:white;border-radius:10px;padding:2px 7px;font-size:10px;margin-top:3px;display:inline-block;">' + unread + '</div>' : '') +
+        '</div>';
+    div.onclick = () => { unreadCounts[id] = 0; openChat(id); };
+    return div;
+}
+
+function chatRowSignature(id, isGroup, meta) {
+    const name = isGroup ? (meta.name || 'Чат') : (meta.displayName || 'Пользователь');
+    const online = !isGroup && isUserOnline(meta) && canShowLastSeen(meta);
+    return [
+        name, meta.avatarUrl || '', meta.verified ? 1 : 0, online ? 1 : 0,
+        unreadCounts[id] || 0, lastMessagePreviews[id] || '', lastMessageTimes[id] || 0
+    ].join('\u0001');
+}
+
 function renderChatList() {
     const list = $('#chatList');
     if (!list) return;
-    list.innerHTML = '';
 
     const ids = new Set([...activeChats, ...myChatIds]);
-    const sorted = [...ids];
+    const sorted = [...ids].filter(id => isGroupLike(id) ? !!allChats[id] : !!allUsers[id]);
     sorted.sort((a, b) => {
         if (a === GENERAL_CHAT_ID) return -1;
         if (b === GENERAL_CHAT_ID) return 1;
         return (lastMessageTimes[b] || 0) - (lastMessageTimes[a] || 0);
     });
 
-    for (const id of sorted) {
+    // Drop rows for chats that fell out of the list entirely.
+    Array.from(list.children).forEach(row => {
+        if (!sorted.includes(row.dataset.cid)) {
+            delete chatListRowSig[row.dataset.cid];
+            row.remove();
+        }
+    });
+
+    let prevEl = null;
+    sorted.forEach(id => {
         const isGroup = isGroupLike(id);
         const meta = isGroup ? allChats[id] : allUsers[id];
-        if (!meta) continue;
+        const sig = chatRowSignature(id, isGroup, meta);
+        let row = list.querySelector(':scope > [data-cid="' + id + '"]');
+        if (!row) {
+            row = buildChatRow(id, isGroup, meta);
+        } else if (chatListRowSig[id] !== sig) {
+            const fresh = buildChatRow(id, isGroup, meta);
+            row.replaceWith(fresh);
+            row = fresh;
+        }
+        chatListRowSig[id] = sig;
+        const wantedNext = prevEl ? prevEl.nextSibling : list.firstChild;
+        if (wantedNext !== row) list.insertBefore(row, wantedNext);
+        prevEl = row;
+    });
 
-        const name = isGroup ? (meta.name || 'Чат') : (meta.displayName || 'Пользователь');
-        const avatarUrl = meta.avatarUrl || '';
-        const unread = unreadCounts[id] || 0;
-        const preview = lastMessagePreviews[id] || '';
-        const time = lastMessageTimes[id] || 0;
-
-        let badge = '';
-        if (id === GENERAL_CHAT_ID) badge = '<span class="chat-badge">общий</span>';
-
-        const online = !isGroup && isUserOnline(meta) && canShowLastSeen(meta);
-
-        const div = document.createElement('div');
-        div.className = 'chat-item';
-        div.innerHTML =
-            '<div class="avatar-wrap"><div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' + (online ? '<span class="online-dot"></span>' : '') + '</div>' +
-            '<div class="chat-info">' +
-            '<div class="chat-name">' + name + (isGroup ? '' : verifiedBadge(meta.verified)) + badge + '</div>' +
-            '<div class="chat-preview">' + preview + '</div>' +
-            '</div>' +
-            '<div class="chat-meta">' +
-            '<div class="chat-time">' + formatTime(time) + '</div>' +
-            (unread > 0 ? '<div style="background:var(--primary);color:white;border-radius:10px;padding:2px 7px;font-size:10px;margin-top:3px;display:inline-block;">' + unread + '</div>' : '') +
-            '</div>';
-        div.onclick = () => { unreadCounts[id] = 0; openChat(id); };
-        list.appendChild(div);
-    }
     updateNavBadge();
 }
 
@@ -1797,23 +1836,18 @@ function subscribe(cid) {
     if (unsubscribeMessages) unsubscribeMessages();
     if (!isGroupLike(currentChat)) watchTyping(cid);
 
-    // The very first snapshot after opening a chat still does a full
-    // build (renderMessagesSnapshot) — simplest way to lay out the whole
-    // history correctly. Every snapshot after that is a real diff against
-    // what's already on screen (a new message, a reaction, a read
-    // receipt, a delete), so it's applied incrementally instead of
-    // wiping and rebuilding the entire message list — that full-rebuild
-    // was exactly what made the chat flash/flicker on every send: the
-    // optimistic local write and the server-confirmed write each
-    // triggered their own full teardown+rebuild of every bubble.
-    let firstSnap = true;
+    // openChat() already left #msgArea in a known-correct state before
+    // calling this — painted from messageCache via renderFromCache(), or
+    // a loading placeholder if there was no cache. So even Firestore's
+    // *first* snapshot (delivered as one 'added' docChange per doc) can
+    // go through the same incremental path as every later one: ids
+    // already in messageCache just get their data silently refreshed
+    // with no DOM touch, and only genuinely new ones get appended. That
+    // removes the double full-rebuild (once from the cache paint, once
+    // from this "first" snapshot) that was flashing the whole chat every
+    // time it was opened.
     unsubscribeMessages = db.collection('messages').where('chatId', '==', cid).orderBy('timestamp', 'asc').limit(200).onSnapshot(snap => {
-        if (firstSnap) {
-            firstSnap = false;
-            renderMessagesSnapshot(snap, cid);
-        } else {
-            applyMessageChanges(snap.docChanges(), cid);
-        }
+        applyMessageChanges(snap.docChanges(), cid);
     }, err => {
         unsubscribeMessages = db.collection('messages').orderBy('timestamp', 'asc').limit(400).onSnapshot(snap2 => {
             const filtered = { docs: snap2.docs.filter(d => d.data().chatId === cid), forEach(fn) { this.docs.forEach(fn); } };
@@ -1874,7 +1908,20 @@ function applyMessageChanges(changes, cid) {
         }
 
         // added
-        if (idx > -1) { msgs[idx] = data; return; }
+        if (idx > -1) {
+            const prevData = msgs[idx];
+            msgs[idx] = data;
+            if (area && !msgVisualsEqual(prevData, data)) {
+                const pos = msgs.findIndex(x => x.id === id);
+                const nextMsg = msgs[pos + 1];
+                const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
+                const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
+                const el = document.getElementById('msg-' + id);
+                if (el) el.replaceWith(fresh); else area.appendChild(fresh);
+            }
+            if (tailMsg && tailMsg.id === id) tailMsg = data;
+            return;
+        }
         msgs.push(data);
         if (!area) return;
 
@@ -2088,6 +2135,12 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         wrapper.appendChild(cb);
     }
 
+    // Same trick as the send button: without this, tapping a message
+    // blurs whatever's focused (the compose input) before the click even
+    // fires, closing the keyboard just to react to something.
+    wrapper.addEventListener('pointerdown', function (e) {
+        if (!selectionMode) e.preventDefault();
+    });
     wrapper.addEventListener('click', function (e) {
         if (selectionMode) return;
         e.stopPropagation();
@@ -2310,6 +2363,7 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
 
     const menu = document.createElement('div');
     menu.className = 'msg-context-menu';
+    menu.addEventListener('pointerdown', e => e.preventDefault());
 
     const rect = wrapper.getBoundingClientRect();
     if (rect.top < 320) {
