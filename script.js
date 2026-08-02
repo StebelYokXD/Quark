@@ -46,6 +46,7 @@ let typingTimers = {};
 let selectedMessages = new Set();
 let selectionMode = false;
 let darkMode = localStorage.getItem('quark_dark') === '1';
+let quickReactionEmoji = localStorage.getItem('quark_quick_reaction') || '👍';
 let accentTheme = localStorage.getItem('quark_accent') || 'purple';
 let amoledMode = localStorage.getItem('quark_amoled') === '1';
 let chatWallpaper = localStorage.getItem('quark_wallpaper') || null;
@@ -357,7 +358,7 @@ function applyWallpaper() {
         area.style.backgroundImage = 'url(' + chatWallpaper + ')';
         area.style.backgroundSize = 'cover';
         area.style.backgroundPosition = 'center';
-        area.style.backgroundAttachment = 'local';
+        area.style.backgroundAttachment = 'scroll';
     } else {
         area.style.backgroundImage = '';
     }
@@ -733,7 +734,7 @@ function buildMainUI() {
                 <div class="pinned-bar-text" id="pinnedBarText"></div>
                 <span class="pinned-bar-close" id="pinnedBarClose"><i class="fas fa-times"></i></span>
             </div>
-            <div class="msg-area no-pinned-bar" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
+            <div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
             <button class="scroll-bottom-btn" id="scrollBottomBtn"><i class="fas fa-chevron-down"></i></button>
             <div class="input-container" id="inputContainer">
                 <div class="mention-suggestions hidden" id="mentionSuggestions"></div>
@@ -774,6 +775,14 @@ function buildMainUI() {
                     <div class="settings-row" id="fontRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(59,130,246,0.15);color:#3B82F6;"><i class="fas fa-font"></i></div><span class="settings-text">Размер шрифта</span></div>
                         <span class="settings-value" id="fontValue">Средний</span>
+                    </div>
+                </div>
+
+                <div class="section-label" style="margin-left:4px;">Сообщения</div>
+                <div class="settings-group">
+                    <div class="settings-row" id="quickReactionRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(124,77,255,0.15);color:#7C4DFF;"><i class="fas fa-bolt"></i></div><span class="settings-text">Быстрая реакция (двойной тап)</span></div>
+                        <span class="settings-value" id="quickReactionValue">👍</span>
                     </div>
                 </div>
 
@@ -870,6 +879,7 @@ function buildMainUI() {
     const fv = $('#fontValue'); if (fv) fv.textContent = { small: 'Мелкий', medium: 'Средний', large: 'Крупный' }[fontSize] || 'Средний';
     const av = $('#accentValue'); if (av) av.textContent = { purple: 'Фиолетовый', blue: 'Синий', green: 'Зелёный', pink: 'Розовый', orange: 'Оранжевый', teal: 'Бирюзовый', red: 'Красный' }[accentTheme] || 'Фиолетовый';
     const wv = $('#wallpaperValue'); if (wv) wv.textContent = chatWallpaper ? 'Своё изображение' : 'По умолчанию';
+    const qrv = $('#quickReactionValue'); if (qrv) qrv.textContent = quickReactionEmoji;
 
     setupListeners();
     setupViewportFix();
@@ -2141,6 +2151,8 @@ function applyMessageChanges(changes, cid) {
 
     let tailMsg = msgs.length ? msgs[msgs.length - 1] : null;
     let tailDateStr = tailMsg ? msgDateOf(tailMsg).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : null;
+    let hasNewMessage = false;
+    let newMessageIsMine = false;
 
     if (area && !msgs.length) area.innerHTML = '';
 
@@ -2208,6 +2220,8 @@ function applyMessageChanges(changes, cid) {
             return;
         }
         msgs.push(data);
+        hasNewMessage = true;
+        if (data.userId === currentUser.uid) newMessageIsMine = true;
         if (!area) return;
 
         const dt = msgDateOf(data);
@@ -2249,7 +2263,9 @@ function applyMessageChanges(changes, cid) {
         if (!msgs.length) {
             area.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Нет сообщений</p></div>';
         } else {
-            area.scrollTop = 999999;
+            if (hasNewMessage && (shouldScrollDown || newMessageIsMine)) {
+                area.scrollTop = 999999;
+            }
             markRead(cid);
         }
     }
@@ -2328,23 +2344,27 @@ function listenForMessages() {
     if (unsubscribeMyMessages) unsubscribeMyMessages();
     if (unsubscribeGeneralMessages) unsubscribeGeneralMessages();
 
+    // No orderBy on purpose: combined with the filter below it would need
+    // a composite Firestore index this project doesn't have provisioned,
+    // and the query would fail silently forever (this is what was quietly
+    // breaking live preview updates and the unread counter). Order
+    // doesn't matter here anyway — each newly-added doc is handled on its
+    // own regardless of what order they arrive in.
     let firstMine = true;
     unsubscribeMyMessages = db.collection('messages')
         .where('participants', 'array-contains', currentUser.uid)
-        .orderBy('timestamp', 'asc')
         .onSnapshot(snap => {
             if (firstMine) { firstMine = false; return; }
             handleIncomingChanges(snap.docChanges());
-        }, () => {});
+        }, (err) => { console.error('listenForMessages (mine) error:', err); });
 
     let firstGeneral = true;
     unsubscribeGeneralMessages = db.collection('messages')
         .where('chatId', '==', GENERAL_CHAT_ID)
-        .orderBy('timestamp', 'asc')
         .onSnapshot(snap => {
             if (firstGeneral) { firstGeneral = false; return; }
             handleIncomingChanges(snap.docChanges());
-        }, () => {});
+        }, (err) => { console.error('listenForMessages (general) error:', err); });
 }
 
 function handleIncomingChanges(changes) {
@@ -2426,11 +2446,84 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     wrapper.addEventListener('pointerdown', function (e) {
         if (!selectionMode) e.preventDefault();
     });
+    // Double-tap = instant quick reaction (like Telegram), single tap
+    // opens the menu — debounced so the first tap of a double-tap doesn't
+    // also pop the menu open before the second tap lands.
+    let lastTapAt = 0;
+    let singleTapTimer = null;
     wrapper.addEventListener('click', function (e) {
         if (selectionMode) return;
         e.stopPropagation();
-        showMessageMenu(m, wrapper, cid, isMine, isChannel);
+        const now = Date.now();
+        if (now - lastTapAt < 300) {
+            clearTimeout(singleTapTimer);
+            lastTapAt = 0;
+            quickReact(m, wrapper);
+            return;
+        }
+        lastTapAt = now;
+        singleTapTimer = setTimeout(() => {
+            showMessageMenu(m, wrapper, cid, isMine, isChannel);
+        }, 260);
     });
+
+    // Swipe-to-reply: swipe toward the bubble's own side (right for a
+    // received message on the left, left for a sent one on the right) —
+    // same gesture Telegram/WhatsApp use, as an alternative to the menu.
+    (function setupSwipeReply() {
+        const allowedDir = isMine ? -1 : 1;
+        const threshold = 58;
+        const maxDrag = 72;
+        let touchStartX = 0, touchStartY = 0, dragging = false, currentDx = 0, replyIcon = null;
+
+        wrapper.addEventListener('touchstart', function (e) {
+            if (selectionMode || e.touches.length !== 1) return;
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            dragging = false;
+        }, { passive: true });
+
+        wrapper.addEventListener('touchmove', function (e) {
+            if (selectionMode || e.touches.length !== 1) return;
+            const dx = e.touches[0].clientX - touchStartX;
+            const dy = e.touches[0].clientY - touchStartY;
+            if (!dragging) {
+                if (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+                if ((allowedDir === 1 && dx <= 0) || (allowedDir === -1 && dx >= 0)) return;
+                dragging = true;
+                clearTimeout(singleTapTimer);
+                const bub = wrapper.querySelector('.msg-bub');
+                if (bub) {
+                    replyIcon = document.createElement('div');
+                    replyIcon.className = 'msg-swipe-reply-icon';
+                    replyIcon.innerHTML = '<i class="fas fa-reply"></i>';
+                    replyIcon.style.cssText = allowedDir === 1 ? 'left:-34px;' : 'right:-34px;';
+                    bub.appendChild(replyIcon);
+                }
+            }
+            if (!dragging) return;
+            let clamped = allowedDir === 1 ? Math.min(dx, maxDrag) : Math.max(dx, -maxDrag);
+            if ((allowedDir === 1 && clamped < 0) || (allowedDir === -1 && clamped > 0)) clamped = 0;
+            currentDx = clamped;
+            wrapper.style.transition = 'none';
+            wrapper.style.transform = 'translateX(' + clamped + 'px)';
+            if (replyIcon) replyIcon.style.opacity = String(Math.min(1, Math.abs(clamped) / threshold));
+        }, { passive: true });
+
+        wrapper.addEventListener('touchend', function () {
+            if (!dragging) return;
+            dragging = false;
+            wrapper.style.transition = 'transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1)';
+            wrapper.style.transform = 'translateX(0)';
+            if (replyIcon) { const el = replyIcon; setTimeout(() => el.remove(), 220); replyIcon = null; }
+            if (Math.abs(currentDx) >= threshold) {
+                const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[m.userId]?.displayName || 'Пользователь'));
+                setReply(m.id, m.text, senderName);
+                if (navigator.vibrate) navigator.vibrate(12);
+            }
+            currentDx = 0;
+        });
+    })();
 
     // In group chats, show the sender's avatar next to received messages,
     // like Telegram. Consecutive messages from the same sender only show
@@ -2810,6 +2903,21 @@ async function toggleReaction(msg, emoji) {
     }
 }
 
+// Double-tap quick reaction: toggles whichever emoji the person picked
+// in Settings (👍 by default), with a brief floating pop for feedback.
+function quickReact(msg, wrapper) {
+    toggleReaction(msg, quickReactionEmoji);
+
+    const anchor = wrapper.querySelector('.msg-bub') || wrapper;
+    const prevPosition = anchor.style.position;
+    if (!prevPosition) anchor.style.position = 'relative';
+    const burst = document.createElement('div');
+    burst.className = 'quick-react-burst';
+    burst.textContent = quickReactionEmoji;
+    anchor.appendChild(burst);
+    setTimeout(() => burst.remove(), 700);
+}
+
 // ==================== REPLY ====================
 function setReply(msgId, text, sender) {
     replyTo = msgId;
@@ -2951,6 +3059,47 @@ function computeParticipants(targetId) {
 }
 
 // ==================== THEME PICKER ====================
+// ==================== QUICK REACTION PICKER ====================
+function openQuickReactionPicker() {
+    const emojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉'];
+
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet';
+
+    const title = document.createElement('div');
+    title.className = 'story-viewers-title';
+    title.textContent = 'Быстрая реакция';
+    sheet.appendChild(title);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'text-align:center;color:var(--text-secondary);font-size:12.5px;padding:0 16px 10px;';
+    hint.textContent = 'Ставится двойным тапом по сообщению';
+    sheet.appendChild(hint);
+
+    const row = document.createElement('div');
+    row.className = 'theme-swatch-row';
+    emojis.forEach(emoji => {
+        const sw = document.createElement('div');
+        sw.className = 'theme-swatch quick-reaction-swatch' + (quickReactionEmoji === emoji ? ' active' : '');
+        sw.textContent = emoji;
+        sw.onclick = () => {
+            quickReactionEmoji = emoji;
+            localStorage.setItem('quark_quick_reaction', emoji);
+            const qrv = $('#quickReactionValue');
+            if (qrv) qrv.textContent = emoji;
+            overlay.remove();
+        };
+        row.appendChild(sw);
+    });
+    sheet.appendChild(row);
+
+    overlay.appendChild(sheet);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+}
+
 function openThemePicker() {
     const names = { purple: 'Фиолетовый', blue: 'Синий', green: 'Зелёный', pink: 'Розовый', orange: 'Оранжевый', teal: 'Бирюзовый', red: 'Красный' };
 
@@ -3046,6 +3195,7 @@ function openForwardPicker(msg, originName) {
 
     const overlay = document.createElement('div');
     overlay.className = 'action-sheet-overlay';
+    overlay.style.zIndex = '410';
     const sheet = document.createElement('div');
     sheet.className = 'action-sheet story-viewers-sheet';
 
@@ -3470,12 +3620,10 @@ function watchPinned(cid) {
 function renderPinnedBar() {
     const bar = $('#pinnedBar');
     const text = $('#pinnedBarText');
-    const area = $('#msgArea');
     if (!bar || !text) return;
 
     if (!currentPinnedList.length) {
         bar.classList.add('hidden');
-        if (area) area.classList.add('no-pinned-bar');
         return;
     }
 
@@ -3484,7 +3632,6 @@ function renderPinnedBar() {
     const msg = (messageCache[cid] || []).find(x => x.id === msgId);
     text.textContent = msg ? (msg.imageUrl ? 'Фото' : (msg.text || 'Сообщение')).substring(0, 60) : 'Закреплённое сообщение';
     bar.classList.remove('hidden');
-    if (area) area.classList.remove('no-pinned-bar');
 
     bar.onclick = function (e) {
         if (e.target.closest('#pinnedBarClose')) return;
@@ -4333,18 +4480,31 @@ function setupScrollToBottomBtn() {
 }
 
 // The open-chat header floats over the message list (see #screenMessages
-// > .header in style.css), so the message list needs to know exactly how
-// tall the header currently is to pad itself clear of it. A
-// ResizeObserver keeps that in sync automatically — the header's height
-// isn't fixed, since the typing indicator adds a second line sometimes.
+// The open-chat header (and the pinned-bar right below it, when shown)
+// float over the message list (see #screenMessages > .header/.pinned-bar
+// in style.css), so the message list needs to know exactly how tall they
+// currently are to pad itself clear of them. ResizeObservers keep that in
+// sync automatically — the header's height isn't fixed (the typing
+// indicator adds a second line sometimes), and the pinned bar's height
+// goes from 0 (display:none) to its real height whenever a message gets
+// pinned or unpinned.
 function setupChatHeaderHeightSync() {
+    if (!window.ResizeObserver) return;
     const header = document.querySelector('#screenMessages > .header');
-    if (!header || !window.ResizeObserver) return;
-    const ro = new ResizeObserver(() => {
-        const h = header.offsetHeight;
-        if (h > 0) document.documentElement.style.setProperty('--chat-header-h', h + 'px');
-    });
-    ro.observe(header);
+    if (header) {
+        const ro = new ResizeObserver(() => {
+            const h = header.offsetHeight;
+            if (h > 0) document.documentElement.style.setProperty('--chat-header-h', h + 'px');
+        });
+        ro.observe(header);
+    }
+    const pinnedBar = document.querySelector('#screenMessages > .pinned-bar');
+    if (pinnedBar) {
+        const ro2 = new ResizeObserver(() => {
+            document.documentElement.style.setProperty('--chat-pinned-h', pinnedBar.offsetHeight + 'px');
+        });
+        ro2.observe(pinnedBar);
+    }
 }
 
 function setupListeners() {
@@ -4457,6 +4617,7 @@ function setupListeners() {
 
     $('#accentRow').onclick = openThemePicker;
     $('#wallpaperRow').onclick = openWallpaperPicker;
+    $('#quickReactionRow').onclick = openQuickReactionPicker;
 
     const scaleUpBtn = $('#scaleUpBtn');
     if (scaleUpBtn) scaleUpBtn.onclick = () => {
