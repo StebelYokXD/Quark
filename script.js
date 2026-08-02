@@ -734,10 +734,7 @@ function buildMainUI() {
                 <button class="icon-button" id="deleteSelectedBtn" style="display:none;color:var(--danger);"><i class="fas fa-trash"></i></button>
             </div>
             <div class="pinned-bar hidden" id="pinnedBar">
-                <div class="pinned-icon-area">
-                    <i class="fas fa-thumbtack" id="pinnedIcon"></i>
-                    <div class="pinned-segments hidden" id="pinnedSegments"></div>
-                </div>
+                <i class="fas fa-thumbtack pinned-bar-icon"></i>
                 <div class="pinned-bar-text" id="pinnedBarText"></div>
                 <span class="pinned-bar-close" id="pinnedBarClose"><i class="fas fa-times"></i></span>
             </div>
@@ -1175,7 +1172,7 @@ async function loadChatPreview(id, cid) {
         messageCache[cid] = msgs;
         if (msgs.length > 0) {
             const last = msgs[msgs.length - 1];
-            lastMessagePreviews[id] = last.imageUrl ? '<i class="fas fa-image"></i> Фото' : (last.text || '').substring(0, 30);
+            lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
             const ts = last.timestamp?.toDate();
             if (ts) lastMessageTimes[id] = ts.getTime();
             renderChatList();
@@ -1208,12 +1205,13 @@ function buildChatRow(id, isGroup, meta) {
         '<div class="avatar-wrap"><div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' + (online ? '<span class="online-dot"></span>' : '') + '</div>' +
         '<div class="chat-info">' +
         '<div class="chat-name">' + name + (isGroup ? '' : verifiedBadge(meta.verified)) + badge + '</div>' +
-        '<div class="chat-preview">' + preview + '</div>' +
+        '<div class="chat-preview"></div>' +
         '</div>' +
         '<div class="chat-meta">' +
         '<div class="chat-time">' + formatTime(time) + '</div>' +
         (unread > 0 ? '<div class="chat-unread-badge">' + (unread > 99 ? '99+' : unread) + '</div>' : '') +
         '</div>';
+    div.querySelector('.chat-preview').textContent = preview;
     div.onclick = () => { unreadCounts[id] = 0; openChat(id); };
     return div;
 }
@@ -1463,6 +1461,21 @@ function openStoryComposer(dataUrl, progress, onDone) {
 // Full-screen story viewer: progress segments across the top (one per
 // story), auto-advances every 5s, tap left/right (or the arrows) to
 // step through, and lets you delete your own story.
+function storyTimeLabel(ts) {
+    if (!ts) return '';
+    const ms = toMillis(ts);
+    const d = new Date(ms);
+    const now = new Date();
+    const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const diffMins = Math.floor((Date.now() - ms) / 60000);
+    if (diffMins < 1) return 'только что';
+    if (diffMins < 60) return diffMins + ' мин назад';
+    if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth()) return 'Сегодня в ' + time;
+    const y = new Date(now); y.setDate(y.getDate() - 1);
+    if (d.getDate() === y.getDate() && d.getMonth() === y.getMonth()) return 'Вчера в ' + time;
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) + ' в ' + time;
+}
+
 function openStoryViewer(uid) {
     const stories = storiesByUser[uid];
     if (!stories || !stories.length) return;
@@ -1483,7 +1496,7 @@ function openStoryViewer(uid) {
         render();
     }
 
-    const QUICK_EMOJIS = ['❤️', '😂', '😮', '😢', '👍', '🔥'];
+    const QUICK_EMOJIS = ALL_REACTIONS;
 
     function myReaction(story) {
         const reactions = story.reactions || {};
@@ -1528,8 +1541,10 @@ function openStoryViewer(uid) {
             '</div>' +
             '<div class="story-viewer-header">' +
             '<div class="avatar">' + (u && u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u ? u.displayName : '')) + '</div>' +
+            '<div class="story-viewer-info">' +
             '<span class="story-viewer-name">' + (u ? (u.displayName || 'Пользователь') : 'Пользователь') + '</span>' +
-            '<span class="story-viewer-time">' + formatTime(toMillis(story.timestamp)) + '</span>' +
+            '<span class="story-viewer-time">' + storyTimeLabel(story.timestamp) + '</span>' +
+            '</div>' +
             (canForward ? '<span class="story-viewer-forward" id="svForward"><i class="fas fa-share"></i></span>' : '') +
             '<span class="story-viewer-close" id="svClose"><i class="fas fa-times"></i></span>' +
             '</div>' +
@@ -2282,7 +2297,7 @@ function applyMessageChanges(changes, cid) {
     const chatKeyId = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
     if (chatKeyId && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        lastMessagePreviews[chatKeyId] = last.imageUrl ? '<i class="fas fa-image"></i> Фото' : (last.text || '').substring(0, 30);
+        lastMessagePreviews[chatKeyId] = last.sticker ? '🎨 Стикер' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
         const ts = last.timestamp && last.timestamp.toDate ? last.timestamp.toDate() : null;
         if (ts) lastMessageTimes[chatKeyId] = ts.getTime();
         renderChatList();
@@ -2327,7 +2342,7 @@ function renderMessagesSnapshot(snap, cid) {
     const id = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
     if (id && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        lastMessagePreviews[id] = last.imageUrl ? '<i class="fas fa-image"></i> Фото' : (last.text || '').substring(0, 30);
+        lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
         const ts = last.timestamp?.toDate();
         if (ts) lastMessageTimes[id] = ts.getTime();
         renderChatList();
@@ -2379,15 +2394,18 @@ function listenForMessages() {
 function handleIncomingChanges(changes) {
     let needsUpdate = false;
     changes.forEach(change => {
+        // Only process adds — modifications (reactions, pins, reads) never
+        // affect the preview or unread count.
         if (change.type !== 'added') return;
         const msg = change.doc.data();
-        // Skip our own messages (prevents the unread counter / sound from
-        // ever firing for something we just sent ourselves) and skip
-        // pending writes that haven't been timestamped by the server yet.
-        if (msg.userId === currentUser.uid || !msg.timestamp) return;
+        // Skip pending writes (no server timestamp yet) to avoid counting
+        // the same message twice (once optimistically, once confirmed).
+        if (!msg.timestamp) return;
 
         const cid = msg.chatId;
         if (!cid) return;
+
+        const isFromMe = msg.userId === currentUser.uid;
 
         let id;
         if (isGroupLike(cid)) {
@@ -2401,17 +2419,26 @@ function handleIncomingChanges(changes) {
             }
         }
 
-        // Keep the preview/time fresh even for chats we're not currently
-        // viewing — this is what makes a preview actually show up without
-        // having opened the chat first.
-        lastMessagePreviews[id] = msg.imageUrl ? '<i class="fas fa-image"></i> Фото' : (msg.text || '').substring(0, 30);
-        lastMessageTimes[id] = toMillis(msg.timestamp);
-        needsUpdate = true;
+        // Always update preview and time — even for your own messages, so
+        // the preview in the chat list always shows the latest message
+        // regardless of who sent it.
+        const previewText = msg.sticker ? '🎨 Стикер' : (msg.imageUrl ? '📷 Фото' : (msg.text || '').substring(0, 30));
+        const msgTime = toMillis(msg.timestamp);
+        if (!lastMessageTimes[id] || msgTime > lastMessageTimes[id]) {
+            lastMessagePreviews[id] = previewText;
+            lastMessageTimes[id] = msgTime;
+            needsUpdate = true;
+        }
 
-        const curCid = currentChat ? chatIdFor(currentChat) : '';
-        if (cid !== curCid) {
-            unreadCounts[id] = (unreadCounts[id] || 0) + 1;
-            playSound();
+        // Increment unread only for messages from others, and only when
+        // not in that chat right now.
+        if (!isFromMe) {
+            const curCid = currentChat ? chatIdFor(currentChat) : '';
+            if (cid !== curCid) {
+                unreadCounts[id] = (unreadCounts[id] || 0) + 1;
+                needsUpdate = true;
+                playSound();
+            }
         }
     });
     if (needsUpdate) renderChatList();
@@ -2795,6 +2822,7 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
     // --- Reactions: one row visible, "..." expands the rest ---
     const reactionsWrap = document.createElement('div');
     reactionsWrap.className = 'mcm-reactions-wrap';
+    reactionsWrap.addEventListener('pointerdown', e => e.preventDefault());
 
     const reactionsGrid = document.createElement('div');
     reactionsGrid.className = 'mcm-reactions';
@@ -3071,7 +3099,7 @@ function computeParticipants(targetId) {
 // ==================== THEME PICKER ====================
 // ==================== QUICK REACTION PICKER ====================
 function openQuickReactionPicker() {
-    const emojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉'];
+    const emojis = ALL_REACTIONS;
 
     const overlay = document.createElement('div');
     overlay.className = 'action-sheet-overlay';
@@ -3799,7 +3827,6 @@ function watchPinned(cid) {
 function renderPinnedBar() {
     const bar = $('#pinnedBar');
     const text = $('#pinnedBarText');
-    const segments = $('#pinnedSegments');
     if (!bar || !text) return;
 
     if (!currentPinnedList.length) {
@@ -3812,21 +3839,6 @@ function renderPinnedBar() {
     const msg = (messageCache[cid] || []).find(x => x.id === msgId);
     text.textContent = msg ? (msg.imageUrl ? 'Фото' : (msg.text || 'Сообщение')).substring(0, 60) : 'Закреплённое сообщение';
     bar.classList.remove('hidden');
-
-    const icon = $('#pinnedIcon');
-    if (segments) {
-        if (currentPinnedList.length > 1) {
-            segments.innerHTML = currentPinnedList.map((_, i) =>
-                '<div class="pinned-seg' + (i === pinnedShownIndex ? ' active' : '') + '"></div>'
-            ).join('');
-            segments.classList.remove('hidden');
-            if (icon) icon.classList.add('hidden');
-        } else {
-            segments.innerHTML = '';
-            segments.classList.add('hidden');
-            if (icon) icon.classList.remove('hidden');
-        }
-    }
 
     bar.onclick = function (e) {
         if (e.target.closest('#pinnedBarClose')) return;
@@ -4125,7 +4137,7 @@ async function renderProfileMedia(container, cid) {
         const withTime = [];
         snap.forEach(doc => {
             const m = doc.data();
-            if (m.imageUrl) withTime.push({ url: m.imageUrl, ts: toMillis(m.timestamp) || 0 });
+            if (m.imageUrl && !m.sticker) withTime.push({ url: m.imageUrl, ts: toMillis(m.timestamp) || 0 });
         });
         withTime.sort((a, b) => b.ts - a.ts);
         const imgs = withTime.map(x => x.url);
