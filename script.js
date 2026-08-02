@@ -50,6 +50,8 @@ let quickReactionEmoji = localStorage.getItem('quark_quick_reaction') || '👍';
 let accentTheme = localStorage.getItem('quark_accent') || 'purple';
 let amoledMode = localStorage.getItem('quark_amoled') === '1';
 let chatWallpaper = localStorage.getItem('quark_wallpaper') || null;
+let myStickers = [];
+let unsubscribeStickers = null;
 let fontSize = localStorage.getItem('quark_font') || 'medium';
 // Desktop two-pane layout (chat list + open chat side by side, like
 // Telegram Desktop) kicks in above this width; below it we keep the
@@ -562,6 +564,8 @@ function teardownSession() {
     if (unsubscribeChatMeta) { unsubscribeChatMeta(); unsubscribeChatMeta = null; }
     if (unsubscribeTyping) { unsubscribeTyping(); unsubscribeTyping = null; }
     if (unsubscribeStories) { unsubscribeStories(); unsubscribeStories = null; }
+    if (unsubscribeStickers) { unsubscribeStickers(); unsubscribeStickers = null; }
+    myStickers = [];
     if (unsubscribePinned) { unsubscribePinned(); unsubscribePinned = null; }
     if (unsubscribeComments) { unsubscribeComments(); unsubscribeComments = null; }
     currentPinnedIds = new Set();
@@ -730,7 +734,10 @@ function buildMainUI() {
                 <button class="icon-button" id="deleteSelectedBtn" style="display:none;color:var(--danger);"><i class="fas fa-trash"></i></button>
             </div>
             <div class="pinned-bar hidden" id="pinnedBar">
-                <i class="fas fa-thumbtack"></i>
+                <div class="pinned-icon-area">
+                    <i class="fas fa-thumbtack" id="pinnedIcon"></i>
+                    <div class="pinned-segments hidden" id="pinnedSegments"></div>
+                </div>
                 <div class="pinned-bar-text" id="pinnedBarText"></div>
                 <span class="pinned-bar-close" id="pinnedBarClose"><i class="fas fa-times"></i></span>
             </div>
@@ -862,7 +869,8 @@ function buildMainUI() {
     const menu = document.createElement('div');
     menu.className = 'attach-menu';
     menu.id = 'attachMenu';
-    menu.innerHTML = '<button class="attach-menu-item" data-accept="image/*"><i class="fas fa-image" style="color:#10B981;"></i> Фото</button>';
+    menu.innerHTML = '<button class="attach-menu-item" data-accept="image/*"><i class="fas fa-image" style="color:#10B981;"></i> Фото</button>' +
+        '<button class="attach-menu-item" id="attachStickerBtn"><i class="fas fa-icons" style="color:#F59E0B;"></i> Стикер</button>';
     document.body.appendChild(menu);
 
     renderOwnProfile();
@@ -1067,6 +1075,7 @@ async function initChats() {
     renderChatList();
     listenForMessages();
     watchStories();
+    watchStickers();
     setTimeout(initPush, 2000);
 }
 
@@ -2627,9 +2636,10 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         bubble.style.background = 'none';
         bubble.style.border = 'none';
         bubble.style.backdropFilter = 'none';
+        if (m.sticker) bubble.style.boxShadow = 'none';
         const img = document.createElement('img');
         img.src = m.imageUrl;
-        img.className = 'msg-img';
+        img.className = m.sticker ? 'msg-img msg-sticker-img' : 'msg-img';
         img.onclick = function (e) {
             e.stopPropagation();
             const chatImgs = (messageCache[cid] || []).filter(x => x.imageUrl);
@@ -3301,6 +3311,175 @@ function compressWallpaper(file) {
     });
 }
 
+// ==================== STICKERS (made from your own photos) ====================
+// Crops to a centered square and keeps PNG (not JPEG) so the sticker's
+// edges stay crisp — actual background removal needs real image
+// segmentation, which isn't something we can do client-side here, but a
+// clean square crop already gets close to how a custom "sticker" looks
+// and feels in the chat (no bubble chrome, just the image).
+function compressSticker(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+                const side = Math.min(img.width, img.height);
+                const sx = (img.width - side) / 2;
+                const sy = (img.height - side) / 2;
+                const out = 360;
+                const canvas = document.createElement('canvas');
+                canvas.width = out;
+                canvas.height = out;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, sx, sy, side, side, 0, 0, out, out);
+                resolve(canvas.toDataURL('image/png'));
+            };
+            img.onerror = reject;
+            img.src = reader.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+function watchStickers() {
+    if (unsubscribeStickers) { unsubscribeStickers(); unsubscribeStickers = null; }
+    if (!currentUser) return;
+    // No orderBy on purpose, same reasoning as elsewhere in this file —
+    // an equality filter plus orderBy on a different field needs a
+    // composite Firestore index this project doesn't have, and it's not
+    // worth the risk for something this low-stakes. Sort client-side.
+    unsubscribeStickers = db.collection('stickers').where('userId', '==', currentUser.uid).onSnapshot(snap => {
+        const items = [];
+        snap.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+        items.sort((a, b) => toMillis(b.timestamp) - toMillis(a.timestamp));
+        myStickers = items;
+        const grid = document.querySelector('.sticker-picker-grid');
+        if (grid) renderStickerGrid(grid);
+    }, () => {});
+}
+
+function openStickerPicker() {
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet story-viewers-sheet';
+
+    const title = document.createElement('div');
+    title.className = 'story-viewers-title';
+    title.textContent = 'Стикеры';
+    sheet.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.className = 'sticker-picker-grid';
+    sheet.appendChild(grid);
+    renderStickerGrid(grid);
+
+    overlay.appendChild(sheet);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+
+    function renderStickerGridLocal() { renderStickerGrid(grid); }
+    grid._closeOverlay = () => overlay.remove();
+}
+
+function renderStickerGrid(grid) {
+    grid.innerHTML = '';
+
+    const addTile = document.createElement('div');
+    addTile.className = 'sticker-add-tile';
+    addTile.innerHTML = '<i class="fas fa-plus"></i>';
+    addTile.onclick = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = async () => {
+            const file = input.files[0];
+            if (!file) return;
+            try {
+                const dataUrl = await compressSticker(file);
+                await db.collection('stickers').add({
+                    userId: currentUser.uid,
+                    imageUrl: dataUrl,
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            } catch (e) {
+                showCustomAlert('Не удалось создать стикер');
+            }
+        };
+        input.click();
+    };
+    grid.appendChild(addTile);
+
+    myStickers.forEach(s => {
+        const tile = document.createElement('div');
+        tile.className = 'sticker-tile';
+        tile.innerHTML = '<img src="' + s.imageUrl + '">';
+        tile.onclick = () => {
+            sendSticker(s.imageUrl);
+            const overlay = grid.closest('.action-sheet-overlay');
+            if (overlay) overlay.remove();
+        };
+        let pressTimer = null;
+        tile.onpointerdown = () => {
+            pressTimer = setTimeout(() => {
+                showActionSheet([{
+                    label: 'Удалить стикер',
+                    icon: 'fa-trash',
+                    danger: true,
+                    onClick: () => db.collection('stickers').doc(s.id).delete().catch(() => {})
+                }]);
+            }, 450);
+        };
+        tile.onpointerup = () => clearTimeout(pressTimer);
+        tile.onpointerleave = () => clearTimeout(pressTimer);
+        grid.appendChild(tile);
+    });
+
+    if (!myStickers.length) {
+        const hint = document.createElement('div');
+        hint.className = 'sticker-empty-hint';
+        hint.textContent = 'Нажмите «+», чтобы сделать свой первый стикер из фото';
+        grid.appendChild(hint);
+    }
+}
+
+async function sendSticker(imageUrl) {
+    if (!currentUser || !currentChat) return;
+    const cid = chatIdFor(currentChat);
+    const isChannel = allChats[currentChat] && allChats[currentChat].type === 'channel';
+    if (isChannel && !(allChats[currentChat].admins || []).includes(currentUser.uid)) return;
+    const participants = computeParticipants(currentChat);
+
+    const payload = {
+        text: '',
+        imageUrl: imageUrl,
+        sticker: true,
+        fileName: '',
+        fileType: '',
+        fileUrl: imageUrl,
+        userId: currentUser.uid,
+        chatId: cid,
+        readBy: [],
+        replyTo: replyTo || null,
+        reactions: {},
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    if (participants) payload.participants = participants;
+
+    try {
+        await db.collection('messages').add(payload);
+        cancelReply();
+        clearTyping(cid);
+        if (!isGroupLike(currentChat) && !activeChats.has(currentChat)) {
+            activeChats.add(currentChat);
+            await loadChatPreview(currentChat, cid);
+        }
+    } catch (e) {
+        showSendErrorModal(e);
+    }
+}
+
 function compressFile(file) {
     return new Promise(resolve => {
         const reader = new FileReader();
@@ -3620,6 +3799,7 @@ function watchPinned(cid) {
 function renderPinnedBar() {
     const bar = $('#pinnedBar');
     const text = $('#pinnedBarText');
+    const segments = $('#pinnedSegments');
     if (!bar || !text) return;
 
     if (!currentPinnedList.length) {
@@ -3632,6 +3812,21 @@ function renderPinnedBar() {
     const msg = (messageCache[cid] || []).find(x => x.id === msgId);
     text.textContent = msg ? (msg.imageUrl ? 'Фото' : (msg.text || 'Сообщение')).substring(0, 60) : 'Закреплённое сообщение';
     bar.classList.remove('hidden');
+
+    const icon = $('#pinnedIcon');
+    if (segments) {
+        if (currentPinnedList.length > 1) {
+            segments.innerHTML = currentPinnedList.map((_, i) =>
+                '<div class="pinned-seg' + (i === pinnedShownIndex ? ' active' : '') + '"></div>'
+            ).join('');
+            segments.classList.remove('hidden');
+            if (icon) icon.classList.add('hidden');
+        } else {
+            segments.innerHTML = '';
+            segments.classList.add('hidden');
+            if (icon) icon.classList.remove('hidden');
+        }
+    }
 
     bar.onclick = function (e) {
         if (e.target.closest('#pinnedBarClose')) return;
@@ -4027,7 +4222,7 @@ function showCreateChatFlow(type) {
     const modal = document.createElement('div');
     modal.className = 'big-modal';
 
-    const state = { name: '', username: '', avatarUrl: '', selected: new Set() };
+    const state = { name: '', username: '', avatarUrl: '', description: '', selected: new Set() };
     const title = type === 'group' ? 'Новая группа' : 'Новый канал';
 
     function renderStep1() {
@@ -4037,6 +4232,7 @@ function showCreateChatFlow(type) {
             '<div class="chat-info-avatar-wrap"><div class="avatar" id="ccAvatar" style="cursor:pointer;">' + (state.avatarUrl ? '<img src="' + state.avatarUrl + '" style="width:100%;height:100%;object-fit:cover;">' : '<i class="fas fa-camera"></i>') + '</div></div>' +
             '<div class="form-group"><label>Название</label><input type="text" class="form-input" id="ccName" value="' + state.name + '" placeholder="' + (type === 'group' ? 'Название группы' : 'Название канала') + '"></div>' +
             '<div class="form-group"><label>Username (необязательно)</label><input type="text" class="form-input" id="ccUsername" value="' + state.username + '" placeholder="username"></div>' +
+            '<div class="form-group"><label>Описание (необязательно)</label><textarea class="form-input" id="ccDescription" rows="2" placeholder="' + (type === 'group' ? 'О чём эта группа' : 'О чём этот канал') + '">' + state.description + '</textarea></div>' +
             '</div>' +
             '<div class="big-modal-footer"><button class="btn btn-primary" id="ccNext">' + (type === 'group' ? 'Далее: участники' : 'Создать') + '</button></div>';
 
@@ -4066,6 +4262,7 @@ function showCreateChatFlow(type) {
         modal.querySelector('#ccNext').onclick = async () => {
             state.name = modal.querySelector('#ccName').value.trim();
             state.username = modal.querySelector('#ccUsername').value.trim().replace('@', '');
+            state.description = modal.querySelector('#ccDescription').value.trim();
             if (!state.name) return showCustomAlert('Введите название');
             if (state.username) {
                 if (!/^[a-zA-Z0-9_]+$/.test(state.username)) return showCustomAlert('Username: только латинские буквы, цифры и подчёркивания');
@@ -4124,14 +4321,14 @@ function showCreateChatFlow(type) {
                 name: state.name,
                 username: state.username || '',
                 avatarUrl: state.avatarUrl || '',
-                description: '',
+                description: state.description || '',
                 members: members,
                 admins: [currentUser.uid],
                 createdBy: currentUser.uid,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
             });
             overlay.remove();
-            allChats[ref.id] = { id: ref.id, type, name: state.name, username: state.username, avatarUrl: state.avatarUrl, members, admins: [currentUser.uid] };
+            allChats[ref.id] = { id: ref.id, type, name: state.name, username: state.username, avatarUrl: state.avatarUrl, description: state.description || '', members, admins: [currentUser.uid] };
             myChatIds.add(ref.id);
             openChat(ref.id);
         } catch (e) {
@@ -4175,6 +4372,7 @@ function showChatInfo(id) {
             '<div class="tg-cover-sub">' + (meta.username ? '@' + meta.username + ' &middot; ' : '') + members.length + ' ' + memberLabel + '</div>' +
             '</div>' +
             '</div>' +
+            (meta.description ? '<div class="tg-chat-description">' + meta.description.replace(/</g, '&lt;') + '</div>' : '') +
             '<div class="tg-actions-row">' +
             (canAdd ? '<div class="tg-action-btn" id="ciAddMember"><div class="circle"><i class="fas fa-user-plus"></i></div><span>Добавить</span></div>' : '') +
             '</div>' +
@@ -4183,6 +4381,7 @@ function showChatInfo(id) {
                 '<div class="tg-edit-list">' +
                 '<div class="form-group"><label>Название</label><input type="text" class="form-input" id="ciName" value="' + (meta.name || '') + '"></div>' +
                 '<div class="form-group"><label>Username</label><input type="text" class="form-input" id="ciUsername" value="' + (meta.username || '') + '"></div>' +
+                '<div class="form-group"><label>Описание</label><textarea class="form-input" id="ciDescription" rows="2" placeholder="' + (isChannel ? 'О чём этот канал' : 'О чём эта группа') + '">' + (meta.description || '') + '</textarea></div>' +
                 '<button class="btn btn-primary" id="ciSave" style="margin-bottom:14px;">Сохранить</button>' +
                 '</div>'
             ) : '') +
@@ -4266,13 +4465,18 @@ function showChatInfo(id) {
             body.querySelector('#ciSave').onclick = async () => {
                 const name = body.querySelector('#ciName').value.trim();
                 const username = body.querySelector('#ciUsername').value.trim().replace('@', '');
+                const description = body.querySelector('#ciDescription').value.trim();
                 if (!name) return showCustomAlert('Введите название');
                 if (username && !/^[a-zA-Z0-9_]+$/.test(username)) return showCustomAlert('Username: только латинские буквы, цифры и подчёркивания');
                 if (username && username !== meta.username) {
                     if (await isUsernameTaken(username, { excludeChatId: id })) return showCustomAlert('Этот username уже занят');
                 }
-                await db.collection('chats').doc(id).update({ name, username: username || '' });
+                await db.collection('chats').doc(id).update({ name, username: username || '', description: description || '' });
+                meta.name = name;
+                meta.username = username || '';
+                meta.description = description || '';
                 showCustomAlert('✅ Сохранено');
+                render();
             };
 
             const avEl = body.querySelector('#ciAvatar');
@@ -4566,6 +4770,7 @@ function setupListeners() {
     };
 
     $$('.attach-menu-item').forEach(item => {
+        if (item.id === 'attachStickerBtn') return;
         item.onclick = function (e) {
             e.stopPropagation();
             const fi = $('#fileInput');
@@ -4576,6 +4781,15 @@ function setupListeners() {
             $('#attachMenu').classList.remove('show');
         };
     });
+
+    const stickerBtn = $('#attachStickerBtn');
+    if (stickerBtn) {
+        stickerBtn.onclick = function (e) {
+            e.stopPropagation();
+            $('#attachMenu').classList.remove('show');
+            openStickerPicker();
+        };
+    }
 
     $('#fileInput').onchange = () => {
         if ($('#fileInput').files[0]) sendMsg();
