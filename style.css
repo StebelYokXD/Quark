@@ -3337,3 +3337,266 @@ body {
     font-size: calc(12.5px * var(--ui-scale, 1));
     padding: calc(10px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1));
 }
+
+/* ==================== VOICE MESSAGES ==================== */
+.send-btn.voice-mode {
+    background: linear-gradient(135deg, var(--primary), #A78BFA);
+}
+
+.voice-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: pop 0.15s ease;
+}
+
+.voice-modal {
+    background: var(--surface);
+    border-radius: calc(24px * var(--ui-scale, 1));
+    padding: calc(32px * var(--ui-scale, 1)) calc(28px * var(--ui-scale, 1));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(18px * var(--ui-scale, 1));
+    width: calc(280px * var(--ui-scale, 1));
+    box-shadow: var(--shadow-lg);
+}
+
+.voice-waveform {
+    display: flex;
+    align-items: center;
+    gap: calc(3px * var(--ui-scale, 1));
+    height: calc(48px * var(--ui-scale, 1));
+}
+
+.voice-bar {
+    width: calc(3px * var(--ui-scale, 1));
+    border-radius: calc(2px * var(--ui-scale, 1));
+    background: var(--primary);
+    animation: voiceWave 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes voiceWave {
+    0% { height: calc(6px * var(--ui-scale, 1)); opacity: 0.4; }
+    100% { height: calc(36px * var(--ui-scale, 1)); opacity: 1; }
+}
+
+.voice-timer {
+    font-size: calc(28px * var(--ui-scale, 1));
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.voice-hint {
+    font-size: calc(12.5px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.voice-actions {
+    display: flex;
+    gap: calc(24px * var(--ui-scale, 1));
+    align-items: center;
+}
+
+.voice-cancel-btn, .voice-stop-btn {
+    width: calc(52px * var(--ui-scale, 1));
+    height: calc(52px * var(--ui-scale, 1));
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    font-size: calc(18px * var(--ui-scale, 1));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.voice-cancel-btn {
+    background: var(--surface);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+}
+
+.voice-stop-btn {
+    background: linear-gradient(135deg, var(--primary), #A78BFA);
+    color: white;
+    box-shadow: 0 6px 20px var(--primary-glow);
+}
+
+/* Voice message in chat */
+.msg-voice {
+    display: flex;
+    align-items: center;
+    gap: calc(10px * var(--ui-scale, 1));
+    padding: calc(6px * var(--ui-scale, 1));
+    min-width: calc(180px * var(--ui-scale, 1));
+}
+
+.msg-voice-play {
+    width: calc(36px * var(--ui-scale, 1));
+    height: calc(36px * var(--ui-scale, 1));
+    border-radius: 50%;
+    border: none;
+    background: var(--primary);
+    color: white;
+    font-size: calc(13px * var(--ui-scale, 1));
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.msg-voice-wave {
+    flex: 1;
+    height: calc(28px * var(--ui-scale, 1));
+    display: flex;
+    align-items: center;
+    gap: calc(2px * var(--ui-scale, 1));
+}
+
+.msg-voice-bar {
+    width: calc(3px * var(--ui-scale, 1));
+    border-radius: calc(2px * var(--ui-scale, 1));
+    background: var(--primary);
+    opacity: 0.7;
+}
+
+.msg-voice-dur {
+    font-size: calc(11px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+/* ==================== STICKER PANEL ==================== */
+.sticker-panel {
+    background: var(--surface);
+    border-top: 1px solid var(--glass-border);
+    height: calc(260px * var(--ui-scale, 1));
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.sticker-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: calc(10px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    font-weight: 700;
+    font-size: calc(13.5px * var(--ui-scale, 1));
+    color: var(--text);
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.sticker-panel-close {
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: calc(15px * var(--ui-scale, 1));
+}
+
+.sticker-panel .sticker-picker-grid {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: calc(8px * var(--ui-scale, 1));
+}
+
+/* ==================== USER BADGE ==================== */
+.user-badge {
+    font-size: calc(13px * var(--ui-scale, 1));
+    vertical-align: -1px;
+    display: inline;
+}
+
+.badge-picker-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(8px * var(--ui-scale, 1));
+    padding: calc(6px * var(--ui-scale, 1)) 0;
+}
+
+.badge-option {
+    width: calc(36px * var(--ui-scale, 1));
+    height: calc(36px * var(--ui-scale, 1));
+    border-radius: calc(10px * var(--ui-scale, 1));
+    border: calc(2px * var(--ui-scale, 1)) solid var(--glass-border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(18px * var(--ui-scale, 1));
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.badge-option.selected {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 15%, var(--surface));
+}
+
+/* ==================== COMMENT ACTIONS ==================== */
+.comment-reply-block {
+    font-size: calc(12px * var(--ui-scale, 1));
+    color: var(--text-secondary);
+    border-left: 3px solid var(--primary);
+    padding-left: calc(8px * var(--ui-scale, 1));
+    margin-bottom: calc(4px * var(--ui-scale, 1));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.comment-reply-name {
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.comment-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(4px * var(--ui-scale, 1));
+    margin-top: calc(4px * var(--ui-scale, 1));
+}
+
+.comment-action-row {
+    display: flex;
+    align-items: center;
+    gap: calc(10px * var(--ui-scale, 1));
+    margin-top: calc(5px * var(--ui-scale, 1));
+}
+
+.comment-action-btn {
+    font-size: calc(11.5px * var(--ui-scale, 1));
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.comment-emoji-row {
+    display: flex;
+    gap: calc(4px * var(--ui-scale, 1));
+    flex-wrap: wrap;
+}
+
+.comment-emoji-btn {
+    font-size: calc(16px * var(--ui-scale, 1));
+    cursor: pointer;
+    line-height: 1;
+    padding: calc(2px * var(--ui-scale, 1));
+    border-radius: calc(6px * var(--ui-scale, 1));
+    transition: transform 0.1s ease;
+}
+
+.comment-emoji-btn:active {
+    transform: scale(1.3);
+}

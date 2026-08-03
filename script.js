@@ -612,8 +612,37 @@ async function logout() {
 // every other client just reads it like any other profile field.
 const VERIFIED_EMAIL = 'kreys.tt.tt@gmail.com';
 const VERIFIED_BADGE_HTML = '<i class="fas fa-check-circle verified-badge" title="Подтверждённый аккаунт"></i>';
-function verifiedBadge(isVerified) {
-    return isVerified ? ' ' + VERIFIED_BADGE_HTML : '';
+
+const PROFILE_BADGES = [
+    null,
+    '⭐', '🔥', '💎', '👑', '🚀', '🎯', '⚡', '🌟',
+    '🦁', '🐉', '🦊', '🐺', '🦅', '🌙', '🌈', '❄️',
+    '🎭', '🎮', '🎸', '🎨', '📚', '💻', '🎬', '🏆'
+];
+
+function verifiedBadge(isVerified, badge) {
+    let html = '';
+    if (badge) html += ' <span class="user-badge">' + badge + '</span>';
+    if (isVerified) html += ' ' + VERIFIED_BADGE_HTML;
+    return html;
+}
+
+function initBadgePicker(container, currentBadge) {
+    if (!container) return;
+    container.dataset.selected = currentBadge || '';
+    PROFILE_BADGES.forEach(b => {
+        const btn = document.createElement('span');
+        const active = b === currentBadge || (!b && !currentBadge);
+        btn.className = 'badge-option' + (active ? ' selected' : '');
+        btn.textContent = b || '✕';
+        btn.title = b ? b : 'Без значка';
+        btn.onclick = () => {
+            container.querySelectorAll('.badge-option').forEach(el => el.classList.remove('selected'));
+            btn.classList.add('selected');
+            container.dataset.selected = b || '';
+        };
+        container.appendChild(btn);
+    });
 }
 
 async function loadProfile() {
@@ -746,7 +775,7 @@ function buildMainUI() {
                 <div class="input-row" id="inputRow">
                     <button class="icon-button" id="attachBtn"><i class="fas fa-paperclip"></i></button>
                     <textarea class="msg-input" id="msgInput" placeholder="Сообщение..." rows="1"></textarea>
-                    <button class="send-btn" id="sendBtn"><i class="fas fa-paper-plane"></i></button>
+                    <button class="send-btn voice-mode" id="sendBtn"><i class="fas fa-microphone"></i></button>
                 </div>
                 <div class="channel-locked-input hidden" id="channelLockedNote">Только администраторы канала могут отправлять сообщения</div>
             </div>
@@ -911,7 +940,7 @@ function renderOwnProfile() {
         '<div class="tg-cover-avatar-edit" id="avEditBtn"><i class="fas fa-camera"></i></div>' +
         '</div>' +
         '<div class="tg-cover-info">' +
-        '<div class="tg-cover-name">' + (p.displayName || 'Пользователь') + verifiedBadge(p.verified) + '</div>' +
+        '<div class="tg-cover-name">' + (p.displayName || 'Пользователь') + verifiedBadge(p.verified, p.badge) + '</div>' +
         '<div class="tg-cover-sub">' + (p.username ? '@' + p.username : '') + '</div>' +
         '</div>' +
         '</div>' +
@@ -922,6 +951,7 @@ function renderOwnProfile() {
         '<div class="form-group"><label>Имя</label><input type="text" class="form-input" id="dnInput" value="' + (p.displayName || '').replace(/"/g, '&quot;') + '"></div>' +
         '<div class="form-group"><label>Username</label><input type="text" class="form-input" id="unInput" placeholder="@username" value="' + (p.username || '').replace(/"/g, '&quot;') + '"></div>' +
         '<div class="form-group"><label>О себе</label><textarea class="form-input" id="bioInput" rows="2">' + (p.bio || '') + '</textarea></div>' +
+        '<div class="form-group"><label>Значок рядом с именем</label><div class="badge-picker-row" id="badgePickerRow"></div></div>' +
         '<button class="btn btn-primary" id="saveProfBtn" style="margin-bottom:14px;">Сохранить</button>' +
         '</div>' +
         '<div class="tg-danger-list">' +
@@ -929,6 +959,7 @@ function renderOwnProfile() {
         '</div>';
 
     renderOwnChannelSection();
+    initBadgePicker($('#badgePickerRow'), p.badge || null);
 
     $('#saveProfBtn').onclick = async () => {
         const dn = $('#dnInput')?.value.trim();
@@ -941,10 +972,12 @@ function renderOwnProfile() {
             if (await isUsernameTaken(un, { excludeUserId: currentUser.uid })) return showCustomAlert('Username занят');
         }
 
+        const selectedBadge = $('#badgePickerRow')?.dataset.selected || '';
         const data = {
             displayName: dn,
             username: un,
             bio: $('#bioInput')?.value.trim() || '',
+            badge: selectedBadge || null,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
         await db.collection('users').doc(currentUser.uid).update(data);
@@ -1172,7 +1205,7 @@ async function loadChatPreview(id, cid) {
         messageCache[cid] = msgs;
         if (msgs.length > 0) {
             const last = msgs[msgs.length - 1];
-            lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
+            lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : last.audioUrl ? '🎤 Голосовое' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
             const ts = last.timestamp?.toDate();
             if (ts) lastMessageTimes[id] = ts.getTime();
             renderChatList();
@@ -1204,7 +1237,7 @@ function buildChatRow(id, isGroup, meta) {
     div.innerHTML =
         '<div class="avatar-wrap"><div class="avatar">' + (avatarUrl ? '<img src="' + avatarUrl + '">' : initials(name)) + '</div>' + (online ? '<span class="online-dot"></span>' : '') + '</div>' +
         '<div class="chat-info">' +
-        '<div class="chat-name">' + name + (isGroup ? '' : verifiedBadge(meta.verified)) + badge + '</div>' +
+        '<div class="chat-name">' + name + (isGroup ? '' : verifiedBadge(meta.verified, meta.badge)) + badge + '</div>' +
         '<div class="chat-preview"></div>' +
         '</div>' +
         '<div class="chat-meta">' +
@@ -1902,7 +1935,157 @@ function openPostComments(msg, cid) {
     };
 }
 
-function renderComments(listEl, items) {
+let commentReplyTo = null;
+
+function openPostComments(msg, cid) {
+    const overlay = document.createElement('div');
+    overlay.className = 'comments-overlay';
+    overlay.innerHTML =
+        '<div class="comments-header">' +
+        '<span class="comments-close" id="cmClose"><i class="fas fa-arrow-left"></i></span>' +
+        '<span class="comments-title">Комментарии</span>' +
+        '</div>' +
+        '<div class="comments-post-preview" id="cmPostPreview"></div>' +
+        '<div class="comments-list" id="cmList"></div>' +
+        '<div class="reply-bar hidden" id="cmReplyBar"><div class="reply-preview" id="cmReplyPreview"></div><span class="reply-close" id="cmReplyClose">✕</span></div>' +
+        '<div class="comments-input-row">' +
+        '<textarea class="comments-input" id="cmInput" placeholder="Написать комментарий..." rows="1"></textarea>' +
+        '<button class="comments-send-btn" id="cmSend"><i class="fas fa-paper-plane"></i></button>' +
+        '</div>';
+    document.body.appendChild(overlay);
+
+    const vv = window.visualViewport;
+    function fitCommentsToViewport() {
+        overlay.style.height = vv.height + 'px';
+        overlay.style.top = vv.offsetTop + 'px';
+        window.scrollTo(0, 0);
+    }
+    if (vv) {
+        vv.addEventListener('resize', fitCommentsToViewport);
+        vv.addEventListener('scroll', fitCommentsToViewport);
+        fitCommentsToViewport();
+    }
+
+    const chMeta = allChats[cid] || {};
+    const previewEl = overlay.querySelector('#cmPostPreview');
+    const previewAvatar = document.createElement('div');
+    previewAvatar.className = 'avatar';
+    previewAvatar.innerHTML = chMeta.avatarUrl ? '<img src="' + chMeta.avatarUrl + '">' : initials(chMeta.name || 'Канал');
+    const previewBody = document.createElement('div');
+    previewBody.className = 'comments-post-body';
+    const previewName = document.createElement('div');
+    previewName.className = 'comments-post-name';
+    previewName.textContent = chMeta.name || 'Канал';
+    const previewText = document.createElement('div');
+    previewText.className = 'comments-post-text';
+    previewText.textContent = msg.text || (msg.imageUrl ? 'Фото' : '');
+    previewBody.appendChild(previewName);
+    previewBody.appendChild(previewText);
+    previewEl.appendChild(previewAvatar);
+    previewEl.appendChild(previewBody);
+
+    const close = () => {
+        commentReplyTo = null;
+        if (unsubscribeComments) { unsubscribeComments(); unsubscribeComments = null; }
+        if (vv) {
+            vv.removeEventListener('resize', fitCommentsToViewport);
+            vv.removeEventListener('scroll', fitCommentsToViewport);
+        }
+        overlay.remove();
+    };
+    overlay.querySelector('#cmClose').onclick = close;
+
+    const replyBar = overlay.querySelector('#cmReplyBar');
+    const replyPreview = overlay.querySelector('#cmReplyPreview');
+    overlay.querySelector('#cmReplyClose').onclick = () => {
+        commentReplyTo = null;
+        replyBar.classList.add('hidden');
+    };
+
+    const listEl = overlay.querySelector('#cmList');
+    let allComments = [];
+    listEl.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Загрузка...</p></div>';
+
+    if (unsubscribeComments) unsubscribeComments();
+    unsubscribeComments = db.collection('comments').where('postId', '==', msg.id).onSnapshot(snap => {
+        allComments = [];
+        snap.forEach(doc => allComments.push({ id: doc.id, ...doc.data() }));
+        allComments.sort((a, b) => toMillis(a.timestamp) - toMillis(b.timestamp));
+        renderComments(listEl, allComments, {
+            onReply: (c) => {
+                commentReplyTo = c;
+                const u = c.userId === currentUser.uid ? currentProfile : allUsers[c.userId];
+                replyPreview.innerHTML = '<i class="fas fa-reply" style="color:var(--primary);margin-right:6px;"></i>' +
+                    '<strong>' + (u ? u.displayName || 'Пользователь' : 'Пользователь') + ':</strong> ' +
+                    (c.text || '').substring(0, 50);
+                replyBar.classList.remove('hidden');
+                overlay.querySelector('#cmInput').focus();
+            },
+            onReact: (c, emoji) => toggleCommentReaction(c, emoji)
+        });
+    }, () => {
+        listEl.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Не удалось загрузить</p></div>';
+    });
+
+    const input = overlay.querySelector('#cmInput');
+    const sendBtn = overlay.querySelector('#cmSend');
+    input.oninput = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 120) + 'px'; };
+    const send = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        sendBtn.disabled = true;
+        try {
+            const commentData = {
+                postId: msg.id,
+                chatId: cid,
+                userId: currentUser.uid,
+                text: text,
+                reactions: {},
+                replyTo: commentReplyTo ? commentReplyTo.id : null,
+                replyToText: commentReplyTo ? (commentReplyTo.text || '').substring(0, 60) : null,
+                replyToUser: commentReplyTo ? (commentReplyTo.userId || null) : null,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            await db.collection('comments').add(commentData);
+            await db.collection('messages').doc(msg.id).update({
+                commentCount: firebase.firestore.FieldValue.increment(1)
+            });
+            input.value = '';
+            input.style.height = 'auto';
+            commentReplyTo = null;
+            replyBar.classList.add('hidden');
+        } catch (e) {
+            console.error('Comment error:', e);
+        }
+        sendBtn.disabled = false;
+    };
+    sendBtn.onclick = send;
+    input.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    };
+}
+
+async function toggleCommentReaction(comment, emoji) {
+    const reactions = { ...(comment.reactions || {}) };
+    if (!reactions[emoji]) reactions[emoji] = [];
+    const idx = reactions[emoji].indexOf(currentUser.uid);
+    if (idx > -1) {
+        reactions[emoji].splice(idx, 1);
+        if (!reactions[emoji].length) delete reactions[emoji];
+    } else {
+        // Remove any previous reaction from this user first
+        for (const e in reactions) {
+            const i = reactions[e].indexOf(currentUser.uid);
+            if (i > -1) { reactions[e].splice(i, 1); if (!reactions[e].length) delete reactions[e]; }
+        }
+        reactions[emoji] = [...(reactions[emoji] || []), currentUser.uid];
+    }
+    try {
+        await db.collection('comments').doc(comment.id).update({ reactions });
+    } catch (e) { console.error('Comment reaction error:', e); }
+}
+
+function renderComments(listEl, items, handlers) {
     listEl.innerHTML = '';
     if (!items.length) {
         listEl.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Пока нет комментариев</p></div>';
@@ -1912,19 +2095,74 @@ function renderComments(listEl, items) {
         const u = c.userId === currentUser.uid ? currentProfile : allUsers[c.userId];
         const row = document.createElement('div');
         row.className = 'comment-row';
+
         const av = document.createElement('div');
         av.className = 'avatar';
         av.innerHTML = u && u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u ? u.displayName : '');
+
         const body = document.createElement('div');
         body.className = 'comment-body';
+
         const nameEl = document.createElement('div');
         nameEl.className = 'comment-name';
-        nameEl.innerHTML = (u ? (u.displayName || 'Пользователь') : 'Пользователь') + (u ? verifiedBadge(u.verified) : '');
+        nameEl.innerHTML = (u ? (u.displayName || 'Пользователь') : 'Пользователь') + (u ? verifiedBadge(u.verified, u.badge) : '');
+
+        // Reply-to preview inside the comment bubble
+        if (c.replyTo && c.replyToText) {
+            const repliedUser = allUsers[c.replyToUser];
+            const replyBlock = document.createElement('div');
+            replyBlock.className = 'comment-reply-block';
+            replyBlock.innerHTML = '<span class="comment-reply-name">' +
+                (repliedUser ? repliedUser.displayName : 'Пользователь') + '</span> ' +
+                c.replyToText;
+            body.appendChild(replyBlock);
+        }
+
         const textEl = document.createElement('div');
         textEl.className = 'comment-text';
         textEl.appendChild(renderTextWithMentions(c.text || ''));
         body.appendChild(nameEl);
         body.appendChild(textEl);
+
+        // Reactions row under the text
+        const reactions = c.reactions || {};
+        const reactKeys = Object.keys(reactions).filter(e => reactions[e] && reactions[e].length);
+        if (reactKeys.length) {
+            const reactRow = document.createElement('div');
+            reactRow.className = 'comment-reactions';
+            reactKeys.forEach(emoji => {
+                const chip = document.createElement('span');
+                const mine = (reactions[emoji] || []).includes(currentUser.uid);
+                chip.className = 'msg-reaction-chip' + (mine ? ' mine' : '');
+                chip.textContent = emoji + ' ' + reactions[emoji].length;
+                chip.onclick = () => handlers && handlers.onReact(c, emoji);
+                reactRow.appendChild(chip);
+            });
+            body.appendChild(reactRow);
+        }
+
+        // Action row: Reply + react-emoji button
+        const actionRow = document.createElement('div');
+        actionRow.className = 'comment-action-row';
+        const replyBtn = document.createElement('span');
+        replyBtn.className = 'comment-action-btn';
+        replyBtn.innerHTML = '<i class="fas fa-reply"></i> Ответить';
+        replyBtn.onclick = () => handlers && handlers.onReply(c);
+        actionRow.appendChild(replyBtn);
+
+        // Quick emoji reactions under comment
+        const emojiRow = document.createElement('div');
+        emojiRow.className = 'comment-emoji-row';
+        ALL_REACTIONS.slice(0, 6).forEach(emoji => {
+            const e = document.createElement('span');
+            e.className = 'comment-emoji-btn';
+            e.textContent = emoji;
+            e.onclick = () => handlers && handlers.onReact(c, emoji);
+            emojiRow.appendChild(e);
+        });
+        actionRow.appendChild(emojiRow);
+        body.appendChild(actionRow);
+
         row.appendChild(av);
         row.appendChild(body);
         listEl.appendChild(row);
@@ -1982,7 +2220,7 @@ function renderChatHeader(id) {
     if (!meta) return;
     const name = isGroup ? (meta.name || 'Чат') : (meta.displayName || 'Пользователь');
     $('#msgAv').innerHTML = meta.avatarUrl ? '<img src="' + meta.avatarUrl + '" style="width:100%;height:100%;object-fit:cover;">' : initials(name);
-    $('#msgName').innerHTML = name + (isGroup ? '' : verifiedBadge(meta.verified));
+    $('#msgName').innerHTML = name + (isGroup ? '' : verifiedBadge(meta.verified, meta.badge));
 
     const info = $('#msgInfo');
     const av = $('#msgAv');
@@ -2297,7 +2535,7 @@ function applyMessageChanges(changes, cid) {
     const chatKeyId = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
     if (chatKeyId && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        lastMessagePreviews[chatKeyId] = last.sticker ? '🎨 Стикер' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
+        lastMessagePreviews[chatKeyId] = last.sticker ? '🎨 Стикер' : last.audioUrl ? '🎤 Голосовое' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
         const ts = last.timestamp && last.timestamp.toDate ? last.timestamp.toDate() : null;
         if (ts) lastMessageTimes[chatKeyId] = ts.getTime();
         renderChatList();
@@ -2342,7 +2580,7 @@ function renderMessagesSnapshot(snap, cid) {
     const id = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
     if (id && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
+        lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : last.audioUrl ? '🎤 Голосовое' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
         const ts = last.timestamp?.toDate();
         if (ts) lastMessageTimes[id] = ts.getTime();
         renderChatList();
@@ -2422,7 +2660,7 @@ function handleIncomingChanges(changes) {
         // Always update preview and time — even for your own messages, so
         // the preview in the chat list always shows the latest message
         // regardless of who sent it.
-        const previewText = msg.sticker ? '🎨 Стикер' : (msg.imageUrl ? '📷 Фото' : (msg.text || '').substring(0, 30));
+        const previewText = msg.sticker ? '🎨 Стикер' : msg.audioUrl ? '🎤 Голосовое' : (msg.imageUrl ? '📷 Фото' : (msg.text || '').substring(0, 30));
         const msgTime = toMillis(msg.timestamp);
         if (!lastMessageTimes[id] || msgTime > lastMessageTimes[id]) {
             lastMessagePreviews[id] = previewText;
@@ -2658,6 +2896,68 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         bubble.appendChild(replyBlock);
     }
 
+    if (m.audioUrl) {
+        const voiceEl = document.createElement('div');
+        voiceEl.className = 'msg-voice';
+        const playBtn = document.createElement('button');
+        playBtn.className = 'msg-voice-play';
+        playBtn.innerHTML = '<i class="fas fa-play"></i>';
+        const waveWrap = document.createElement('div');
+        waveWrap.className = 'msg-voice-wave';
+        waveWrap.innerHTML = Array.from({ length: 24 }, (_, i) => {
+            const h = 30 + Math.sin(i * 0.7 + 1) * 30 + Math.sin(i * 1.3) * 20;
+            return '<div class="msg-voice-bar" style="height:' + Math.max(15, h) + '%"></div>';
+        }).join('');
+        const timeEl = document.createElement('span');
+        timeEl.className = 'msg-voice-dur';
+        if (m.audioDuration) {
+            const d = m.audioDuration;
+            timeEl.textContent = Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0');
+        } else {
+            timeEl.textContent = '0:00';
+        }
+
+        let audio = null;
+        let playing = false;
+        let durationTimer = null;
+
+        playBtn.onclick = function (e) {
+            e.stopPropagation();
+            if (!audio) {
+                audio = new Audio(m.audioUrl);
+                audio.onloadedmetadata = () => {
+                    const d = Math.round(audio.duration);
+                    timeEl.textContent = Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0');
+                };
+                audio.onended = () => {
+                    playing = false;
+                    playBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    clearInterval(durationTimer);
+                    timeEl.textContent = '0:00';
+                };
+            }
+            if (playing) {
+                audio.pause();
+                playing = false;
+                playBtn.innerHTML = '<i class="fas fa-play"></i>';
+                clearInterval(durationTimer);
+            } else {
+                audio.play();
+                playing = true;
+                playBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                durationTimer = setInterval(() => {
+                    const c = Math.round(audio.currentTime);
+                    timeEl.textContent = Math.floor(c / 60) + ':' + String(c % 60).padStart(2, '0');
+                }, 500);
+            }
+        };
+
+        voiceEl.appendChild(playBtn);
+        voiceEl.appendChild(waveWrap);
+        voiceEl.appendChild(timeEl);
+        bubble.appendChild(voiceEl);
+    }
+
     if (m.imageUrl) {
         bubble.style.padding = '0';
         bubble.style.background = 'none';
@@ -2692,6 +2992,12 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
             timeSpan.appendChild(views);
         }
         const timeText = document.createElement('span');
+        if (m.edited) {
+            const editedMark = document.createElement('span');
+            editedMark.style.cssText = 'opacity:0.6;font-size:9.5px;margin-right:2px;';
+            editedMark.textContent = 'изм.';
+            timeSpan.appendChild(editedMark);
+        }
         timeText.textContent = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
         timeSpan.appendChild(timeText);
 
@@ -2872,6 +3178,18 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
         setReply(msg.id, msg.text, senderName);
     }));
 
+    if (isMine && msg.text && !msg.imageUrl && !msg.audioUrl) {
+        actions.appendChild(makeActionBtn('fa-pen', 'Изменить', () => {
+            startEditMessage(msg, cid);
+        }));
+    }
+
+    if (msg.text) {
+        actions.appendChild(makeActionBtn('fa-copy', 'Копировать', () => {
+            navigator.clipboard.writeText(msg.text).catch(() => {});
+        }));
+    }
+
     actions.appendChild(makeActionBtn('fa-share', 'Переслать', () => {
         openForwardPicker(msg, isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (allUsers[msg.userId] ? allUsers[msg.userId].displayName : 'Пользователь'));
     }));
@@ -2911,6 +3229,31 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
             }
         });
     }, 100);
+}
+
+let editingMsgId = null;
+
+function startEditMessage(msg, cid) {
+    editingMsgId = msg.id;
+    const input = $('#msgInput');
+    const replyBar = $('#replyBar');
+    const replyPreview = $('#replyPreview');
+    if (!input || !replyBar || !replyPreview) return;
+    input.value = msg.text || '';
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+    replyPreview.innerHTML = '<i class="fas fa-pen" style="color:var(--primary);margin-right:6px;"></i><strong>Изменить сообщение</strong>';
+    replyBar.classList.remove('hidden');
+    input.focus();
+    updateSendBtnMode();
+}
+
+function cancelEdit() {
+    editingMsgId = null;
+    const input = $('#msgInput');
+    if (input) { input.value = ''; input.style.height = 'auto'; }
+    cancelReply();
+    updateSendBtnMode();
 }
 
 // ==================== TOGGLE REACTION ====================
@@ -2966,10 +3309,118 @@ function setReply(msgId, text, sender) {
 
 function cancelReply() {
     replyTo = null;
-    $('#replyBar').classList.add('hidden');
+    editingMsgId = null;
+    const rb = $('#replyBar');
+    if (rb) rb.classList.add('hidden');
 }
 
 // ==================== SEND MESSAGE ====================
+// ==================== VOICE MODE ====================
+let voiceMediaRecorder = null;
+let voiceChunks = [];
+let voiceTimerInterval = null;
+
+function updateSendBtnMode() {
+    const btn = $('#sendBtn');
+    const input = $('#msgInput');
+    if (!btn || !input) return;
+    const hasText = input.value.trim().length > 0;
+    if (hasText) {
+        btn.classList.remove('voice-mode');
+        btn.innerHTML = '<i class="fas fa-paper-plane"></i>';
+    } else {
+        btn.classList.add('voice-mode');
+        btn.innerHTML = '<i class="fas fa-microphone"></i>';
+    }
+}
+
+async function startVoiceRecording() {
+    if (!currentChat) return;
+    let stream;
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+        showCustomAlert('Нет доступа к микрофону');
+        return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'voice-overlay';
+    overlay.innerHTML =
+        '<div class="voice-modal">' +
+        '<div class="voice-waveform" id="voiceWaveform">' +
+        Array.from({ length: 30 }, (_, i) => '<div class="voice-bar" style="animation-delay:' + (i * 0.06) + 's"></div>').join('') +
+        '</div>' +
+        '<div class="voice-timer" id="voiceTimer">0:00</div>' +
+        '<div class="voice-hint">Нажмите стоп, чтобы отправить</div>' +
+        '<div class="voice-actions">' +
+        '<button class="voice-cancel-btn" id="voiceCancelBtn"><i class="fas fa-times"></i></button>' +
+        '<button class="voice-stop-btn" id="voiceStopBtn"><i class="fas fa-stop"></i></button>' +
+        '</div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+
+    voiceChunks = [];
+    voiceMediaRecorder = new MediaRecorder(stream);
+    voiceMediaRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
+
+    let voiceSeconds = 0;
+    voiceTimerInterval = setInterval(() => {
+        voiceSeconds++;
+        const mins = Math.floor(voiceSeconds / 60);
+        const secs = voiceSeconds % 60;
+        const t = $('#voiceTimer');
+        if (t) t.textContent = mins + ':' + String(secs).padStart(2, '0');
+    }, 1000);
+
+    const stopRecording = (send) => {
+        clearInterval(voiceTimerInterval);
+        overlay.remove();
+
+        // onstop MUST be wired before calling .stop(), otherwise the
+        // event fires before our handler is attached and chunks are lost.
+        voiceMediaRecorder.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            if (!send || !voiceChunks.length) return;
+
+            const mimeType = voiceMediaRecorder.mimeType || 'audio/webm';
+            const blob = new Blob(voiceChunks, { type: mimeType });
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const dataUrl = reader.result;
+                const cid = chatIdFor(currentChat);
+                const participants = computeParticipants(currentChat);
+                const payload = {
+                    text: '',
+                    audioUrl: dataUrl,
+                    audioDuration: Math.round(voiceSeconds),
+                    imageUrl: '',
+                    sticker: false,
+                    userId: currentUser.uid,
+                    chatId: cid,
+                    readBy: [],
+                    replyTo: replyTo || null,
+                    reactions: {},
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                if (participants) payload.participants = participants;
+                try {
+                    await db.collection('messages').add(payload);
+                    cancelReply();
+                } catch (e) { showSendErrorModal(e); }
+            };
+            reader.readAsDataURL(blob);
+        };
+
+        voiceMediaRecorder.stop();
+    };
+
+    voiceMediaRecorder.start();
+
+    overlay.querySelector('#voiceCancelBtn').onclick = () => stopRecording(false);
+    overlay.querySelector('#voiceStopBtn').onclick = () => stopRecording(true);
+}
+
 async function sendMsg() {
     if (!currentUser || !currentChat || selectionMode) return;
 
@@ -2980,6 +3431,19 @@ async function sendMsg() {
     const text = input.value.trim();
     const file = $('#fileInput')?.files[0];
     if (!text && !file) return;
+
+    // If we're in edit mode, save the edit instead of sending a new message
+    if (editingMsgId) {
+        const msgId = editingMsgId;
+        try {
+            await db.collection('messages').doc(msgId).update({ text, edited: true });
+            const cid = chatIdFor(currentChat);
+            const cached = (messageCache[cid] || []).find(m => m.id === msgId);
+            if (cached) { cached.text = text; cached.edited = true; patchSingleMessage(cid, msgId); }
+        } catch (e) { showSendErrorModal(e); }
+        cancelEdit();
+        return;
+    }
 
     const sendBtn = $('#sendBtn');
     if (sendBtn) sendBtn.disabled = true;
@@ -3218,6 +3682,41 @@ function openWallpaperPicker() {
     ]);
 }
 
+// Photo caption dialog — shows the chosen image with a caption input
+// before it goes out, like Telegram's "Add a caption..." flow.
+function openPhotoCaptionDialog(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const dataUrl = e.target.result;
+        const overlay = document.createElement('div');
+        overlay.className = 'story-viewer-overlay story-composer-overlay';
+        overlay.innerHTML =
+            '<div class="story-viewer-header">' +
+            '<span class="story-viewer-close" id="pcClose"><i class="fas fa-times"></i></span>' +
+            '<span class="story-viewer-name">Отправить фото</span>' +
+            '</div>' +
+            '<img class="story-viewer-img" src="' + dataUrl + '" style="object-fit:contain;">' +
+            '<div class="story-composer-bar">' +
+            '<input type="text" class="story-caption-input" id="pcCaption" placeholder="Добавить подпись..." maxlength="500">' +
+            '<button class="story-composer-send" id="pcSend"><i class="fas fa-paper-plane"></i></button>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        const close = () => { overlay.remove(); const fi = $('#fileInput'); if (fi) fi.value = ''; };
+        overlay.querySelector('#pcClose').onclick = close;
+
+        overlay.querySelector('#pcSend').onclick = async () => {
+            const caption = overlay.querySelector('#pcCaption').value.trim();
+            overlay.remove();
+            // Put caption into msgInput so sendMsg() picks it up naturally
+            const input = $('#msgInput');
+            if (input && caption) { input.value = caption; }
+            await sendMsg();
+        };
+    };
+    reader.readAsDataURL(file);
+}
+
 // Bottom sheet listing every chat you can forward into: your DMs, your
 // groups, channels you admin, and the general chat.
 function openForwardPicker(msg, originName) {
@@ -3387,31 +3886,41 @@ function watchStickers() {
     }, () => {});
 }
 
-function openStickerPicker() {
-    const overlay = document.createElement('div');
-    overlay.className = 'action-sheet-overlay';
-    const sheet = document.createElement('div');
-    sheet.className = 'action-sheet story-viewers-sheet';
+let stickerPanelOpen = false;
 
-    const title = document.createElement('div');
-    title.className = 'story-viewers-title';
-    title.textContent = 'Стикеры';
-    sheet.appendChild(title);
+function toggleStickerPanel() {
+    const existing = document.getElementById('stickerPanel');
+    if (existing) {
+        existing.remove();
+        stickerPanelOpen = false;
+        return;
+    }
+    stickerPanelOpen = true;
+    const panel = document.createElement('div');
+    panel.id = 'stickerPanel';
+    panel.className = 'sticker-panel';
+
+    const header = document.createElement('div');
+    header.className = 'sticker-panel-header';
+    header.innerHTML = '<span>Стикеры</span><span class="sticker-panel-close"><i class="fas fa-times"></i></span>';
+    header.querySelector('.sticker-panel-close').onclick = () => { panel.remove(); stickerPanelOpen = false; };
+    panel.appendChild(header);
 
     const grid = document.createElement('div');
     grid.className = 'sticker-picker-grid';
-    sheet.appendChild(grid);
-    renderStickerGrid(grid);
+    panel.appendChild(grid);
+    renderStickerGrid(grid, panel);
 
-    overlay.appendChild(sheet);
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    document.body.appendChild(overlay);
-
-    function renderStickerGridLocal() { renderStickerGrid(grid); }
-    grid._closeOverlay = () => overlay.remove();
+    // Insert before the input-container
+    const inputContainer = $('#inputContainer');
+    inputContainer.parentNode.insertBefore(panel, inputContainer);
 }
 
-function renderStickerGrid(grid) {
+function openStickerPicker() {
+    toggleStickerPanel();
+}
+
+function renderStickerGrid(grid, panel) {
     grid.innerHTML = '';
 
     const addTile = document.createElement('div');
@@ -3445,8 +3954,7 @@ function renderStickerGrid(grid) {
         tile.innerHTML = '<img src="' + s.imageUrl + '">';
         tile.onclick = () => {
             sendSticker(s.imageUrl);
-            const overlay = grid.closest('.action-sheet-overlay');
-            if (overlay) overlay.remove();
+            // Don't close — let the user send more stickers without reopening
         };
         let pressTimer = null;
         tile.onpointerdown = () => {
@@ -4003,7 +4511,7 @@ function viewUserProfile(uid, returnScreen) {
         '<div class="tg-cover' + (user.coverUrl ? ' has-photo' : '') + '"' + (user.coverUrl ? ' style="background-image:url(\'' + user.coverUrl + '\')"' : '') + '>' +
         '<div class="avatar">' + (user.avatarUrl ? '<img src="' + user.avatarUrl + '" style="width:100%;height:100%;object-fit:cover;">' : initials(user.displayName)) + '</div>' +
         '<div class="tg-cover-info">' +
-        '<div class="tg-cover-name">' + (user.displayName || 'Пользователь') + verifiedBadge(user.verified) + '</div>' +
+        '<div class="tg-cover-name">' + (user.displayName || 'Пользователь') + verifiedBadge(user.verified, user.badge) + '</div>' +
         '<div class="tg-cover-sub" id="vpStatus">' + statusText() + '</div>' +
         '</div>' +
         '</div>' +
@@ -4746,14 +5254,15 @@ function setupListeners() {
     }
 
     const sendBtn = $('#sendBtn');
-    // Prevents the classic "keyboard closes then reopens" flicker: by
-    // default, tapping a <button> steals focus from the textarea, which
-    // makes mobile browsers dismiss the on-screen keyboard for an instant
-    // before our code re-focuses the input. Blocking the button's default
-    // pointer behavior keeps focus (and the keyboard) on the textarea the
-    // whole time, so nothing ever closes.
     sendBtn.addEventListener('pointerdown', e => e.preventDefault());
-    sendBtn.onclick = sendMsg;
+    sendBtn.onclick = function () {
+        const val = ($('#msgInput') || {}).value || '';
+        if (val.trim()) {
+            sendMsg();
+        } else {
+            startVoiceRecording();
+        }
+    };
 
     const input = $('#msgInput');
     if (input) {
@@ -4768,10 +5277,12 @@ function setupListeners() {
             this.style.height = Math.min(this.scrollHeight, 100) + 'px';
             setTyping();
             updateMentionSuggestions(this);
+            updateSendBtnMode();
         };
-        input.addEventListener('keyup', () => updateMentionSuggestions(input));
+        input.addEventListener('keyup', () => { updateMentionSuggestions(input); updateSendBtnMode(); });
         input.addEventListener('click', () => updateMentionSuggestions(input));
         input.addEventListener('blur', () => setTimeout(hideMentionSuggestions, 150));
+        updateSendBtnMode();
     }
 
     const attachBtn = $('#attachBtn');
@@ -4804,7 +5315,7 @@ function setupListeners() {
     }
 
     $('#fileInput').onchange = () => {
-        if ($('#fileInput').files[0]) sendMsg();
+        if ($('#fileInput').files[0]) openPhotoCaptionDialog($('#fileInput').files[0]);
     };
 
     $('#replyClose').onclick = cancelReply;
@@ -4990,7 +5501,7 @@ async function renderSearchResults(q, rawQuery) {
         div.innerHTML = `
             <div class="avatar">${user.avatarUrl ? '<img src="' + user.avatarUrl + '">' : initials(user.displayName)}</div>
             <div class="chat-info">
-                <div class="chat-name">${user.displayName || 'Пользователь'}${verifiedBadge(user.verified)}</div>
+                <div class="chat-name">${user.displayName || 'Пользователь'}${verifiedBadge(user.verified, user.badge)}</div>
                 ${user.username ? '<div style="font-size:12px;color:var(--primary);">@' + user.username + '</div>' : ''}
             </div>`;
         div.onclick = () => {
