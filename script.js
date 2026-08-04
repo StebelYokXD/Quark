@@ -43,6 +43,10 @@ let lastMessagePreviews = {};
 let lastMessageTimes = {};
 let unreadCounts = {};
 let typingTimers = {};
+
+// ---- Folders (chat filters like Telegram) ----
+let folders = JSON.parse(localStorage.getItem('quark_folders') || '[]');
+let currentFolder = 'all';      // 'all' | 'dms' | 'groups' | 'channels' | folder.id
 let selectedMessages = new Set();
 let selectionMode = false;
 let darkMode = localStorage.getItem('quark_dark') === '1';
@@ -611,6 +615,7 @@ async function logout() {
 // account's own login) by writing verified:true to its own user doc, so
 // every other client just reads it like any other profile field.
 const VERIFIED_EMAIL = 'kreys.tt.tt@gmail.com';
+const ADMIN_EMAILS = [VERIFIED_EMAIL];
 const VERIFIED_BADGE_HTML = '<i class="fas fa-check-circle verified-badge" title="Подтверждённый аккаунт"></i>';
 
 const PROFILE_BADGES = [
@@ -747,6 +752,9 @@ function buildMainUI() {
                 <div class="search-box">
                     <div class="search-wrapper"><i class="fas fa-search"></i><input type="text" class="search-input" id="searchInput" placeholder="Поиск людей, групп, каналов..."></div>
                 </div>
+                <div class="folder-tabs-wrap" id="folderTabsWrap">
+                    <div class="folder-tabs" id="folderTabs"></div>
+                </div>
                 <div id="chatList"></div>
             </div>
             <button class="fab-new-chat" id="newChatBtn"><i class="fas fa-plus"></i></button>
@@ -869,8 +877,19 @@ function buildMainUI() {
                     <div class="settings-row" id="settLogout">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.15);color:var(--danger);"><i class="fas fa-sign-out-alt"></i></div><span class="settings-text" style="color:var(--danger);">Выйти</span></div>
                     </div>
+                    <div class="settings-row hidden" id="adminPanelRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.2);color:#EF4444;"><i class="fas fa-shield-alt"></i></div><span class="settings-text" style="color:#EF4444;font-weight:700;">Панель администратора</span></div>
+                        <i class="fas fa-chevron-right" style="color:var(--text-secondary);"></i>
+                    </div>
                 </div>
             </div>
+        </div>
+        <div class="screen" id="screenAdmin">
+            <div class="header">
+                <button class="icon-button" id="adminBackBtn"><i class="fas fa-arrow-left"></i></button>
+                <span style="font-weight:700;font-size:17px;color:#EF4444;">⚡ Admin Panel</span>
+            </div>
+            <div class="info-scroll" id="adminBody"></div>
         </div>
         <div class="screen" id="screenViewProfile">
             <div class="header">
@@ -1262,8 +1281,28 @@ function renderChatList() {
     const list = $('#chatList');
     if (!list) return;
 
+    renderFolderTabs();
+
     const ids = new Set([...activeChats, ...myChatIds]);
-    const sorted = [...ids].filter(id => isGroupLike(id) ? !!allChats[id] : !!allUsers[id]);
+    let sorted = [...ids].filter(id => isGroupLike(id) ? !!allChats[id] : !!allUsers[id]);
+
+    // Apply active folder filter
+    if (currentFolder !== 'all') {
+        if (currentFolder === 'dms') {
+            sorted = sorted.filter(id => !isGroupLike(id));
+        } else if (currentFolder === 'groups') {
+            sorted = sorted.filter(id => isGroupLike(id) && allChats[id] && allChats[id].type === 'group');
+        } else if (currentFolder === 'channels') {
+            sorted = sorted.filter(id => isGroupLike(id) && allChats[id] && allChats[id].type === 'channel');
+        } else {
+            // Custom folder — filter by pinned chat ids stored in folder def
+            const folder = folders.find(f => f.id === currentFolder);
+            if (folder && folder.chatIds) {
+                sorted = sorted.filter(id => (folder.chatIds || []).includes(id));
+            }
+        }
+    }
+
     sorted.sort((a, b) => {
         if (a === GENERAL_CHAT_ID) return -1;
         if (b === GENERAL_CHAT_ID) return 1;
@@ -1313,6 +1352,181 @@ function updateNavBadge() {
     } else {
         badge.classList.add('hidden');
     }
+}
+
+// ==================== FOLDERS ====================
+const BUILT_IN_FOLDERS = [
+    { id: 'all',      name: 'Все',      icon: 'fas fa-comments' },
+    { id: 'dms',      name: 'Личные',   icon: 'fas fa-user' },
+    { id: 'groups',   name: 'Группы',   icon: 'fas fa-users' },
+    { id: 'channels', name: 'Каналы',   icon: 'fas fa-broadcast-tower' },
+];
+
+function renderFolderTabs() {
+    const wrap = $('#folderTabs');
+    if (!wrap) return;
+
+    // Count unread per folder for badges
+    const countForFolder = (fid) => {
+        let ids;
+        const all = [...new Set([...activeChats, ...myChatIds])];
+        if (fid === 'all') ids = all;
+        else if (fid === 'dms') ids = all.filter(id => !isGroupLike(id));
+        else if (fid === 'groups') ids = all.filter(id => isGroupLike(id) && allChats[id] && allChats[id].type === 'group');
+        else if (fid === 'channels') ids = all.filter(id => isGroupLike(id) && allChats[id] && allChats[id].type === 'channel');
+        else {
+            const f = folders.find(f => f.id === fid);
+            ids = f ? all.filter(id => (f.chatIds || []).includes(id)) : [];
+        }
+        return ids.reduce((s, id) => s + (unreadCounts[id] || 0), 0);
+    };
+
+    const allTabs = [...BUILT_IN_FOLDERS, ...folders];
+    wrap.innerHTML = allTabs.map(f => {
+        const unread = countForFolder(f.id);
+        const active = currentFolder === f.id;
+        return '<div class="folder-tab' + (active ? ' active' : '') + '" data-fid="' + f.id + '">' +
+            (f.icon ? '<i class="' + f.icon + '"></i>' : '<span class="folder-tab-emoji">' + (f.emoji || '📁') + '</span>') +
+            ' <span>' + f.name + '</span>' +
+            (unread > 0 ? '<span class="folder-tab-badge">' + (unread > 99 ? '99+' : unread) + '</span>' : '') +
+            '</div>';
+    }).join('');
+
+    // Add "Edit folders" button at the end
+    wrap.innerHTML += '<div class="folder-tab folder-tab-edit" id="folderEditBtn"><i class="fas fa-plus"></i></div>';
+
+    wrap.querySelectorAll('.folder-tab[data-fid]').forEach(tab => {
+        tab.onclick = () => {
+            currentFolder = tab.dataset.fid;
+            renderChatList();
+        };
+    });
+    const editBtn = wrap.querySelector('#folderEditBtn');
+    if (editBtn) editBtn.onclick = openFolderManager;
+}
+
+function openFolderManager() {
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    overlay.style.zIndex = '350';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet story-viewers-sheet';
+
+    const title = document.createElement('div');
+    title.className = 'story-viewers-title';
+    title.textContent = 'Папки';
+    sheet.appendChild(title);
+
+    const close = () => overlay.remove();
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+    const renderList = () => {
+        const existing = sheet.querySelector('.folder-manager-list');
+        if (existing) existing.remove();
+
+        const list = document.createElement('div');
+        list.className = 'folder-manager-list tg-info-list';
+
+        folders.forEach((f, i) => {
+            const row = document.createElement('div');
+            row.className = 'member-row';
+            row.innerHTML = '<span style="font-size:20px;margin-right:10px;">' + (f.emoji || '📁') + '</span>' +
+                '<div class="member-row-info"><div class="member-row-name">' + f.name + '</div>' +
+                '<div class="member-row-sub">' + (f.chatIds || []).length + ' чатов</div></div>';
+
+            const del = document.createElement('button');
+            del.className = 'member-row-menu';
+            del.innerHTML = '<i class="fas fa-trash" style="color:var(--danger);"></i>';
+            del.onclick = () => {
+                folders.splice(i, 1);
+                saveFolders();
+                if (currentFolder === f.id) { currentFolder = 'all'; }
+                renderList();
+                renderChatList();
+            };
+            row.appendChild(del);
+            row.onclick = (e) => { if (e.target !== del && !del.contains(e.target)) openFolderEdit(f, close); };
+            list.appendChild(row);
+        });
+
+        const addRow = document.createElement('div');
+        addRow.className = 'member-row';
+        addRow.style.color = 'var(--primary)';
+        addRow.innerHTML = '<i class="fas fa-plus" style="margin-right:10px;font-size:16px;"></i><div class="member-row-info"><div class="member-row-name">Создать папку</div></div>';
+        addRow.onclick = () => openFolderEdit(null, close);
+        list.appendChild(addRow);
+
+        sheet.appendChild(list);
+    };
+
+    renderList();
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+}
+
+function openFolderEdit(folder, onDone) {
+    const isNew = !folder;
+    const f = folder ? { ...folder } : { id: 'folder_' + Date.now(), name: '', emoji: '📁', chatIds: [] };
+
+    const overlay = document.createElement('div');
+    overlay.className = 'action-sheet-overlay';
+    overlay.style.zIndex = '360';
+    const sheet = document.createElement('div');
+    sheet.className = 'action-sheet story-viewers-sheet';
+    sheet.innerHTML = '<div class="story-viewers-title">' + (isNew ? 'Новая папка' : 'Изменить папку') + '</div>' +
+        '<div style="padding:12px 16px;display:flex;flex-direction:column;gap:12px;">' +
+        '<div style="display:flex;gap:10px;align-items:center;">' +
+        '<select id="folderEmoji" style="font-size:22px;width:52px;height:40px;border:1px solid var(--glass-border);background:var(--surface);border-radius:10px;text-align:center;">' +
+        ['📁','💼','🏠','❤️','⭐','🎮','📚','🔔','🛒','✈️','💊','🎵'].map(e => '<option value="' + e + '"' + (f.emoji === e ? ' selected' : '') + '>' + e + '</option>').join('') +
+        '</select>' +
+        '<input type="text" class="form-input" id="folderName" placeholder="Название папки" value="' + (f.name || '') + '" style="flex:1;">' +
+        '</div>' +
+        '<div style="font-size:13px;color:var(--text-secondary);">Чаты в папке</div>' +
+        '<div id="folderChatsList" style="max-height:220px;overflow-y:auto;"></div>' +
+        '<button class="btn btn-primary" id="folderSave">Сохранить</button>' +
+        '</div>';
+
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+
+    // Render all chats as toggleable chips
+    const chatsList = sheet.querySelector('#folderChatsList');
+    const allIds = [...new Set([...activeChats, ...myChatIds])];
+    allIds.forEach(id => {
+        const meta = isGroupLike(id) ? allChats[id] : allUsers[id];
+        if (!meta) return;
+        const name = meta.displayName || meta.name || 'Чат';
+        const included = (f.chatIds || []).includes(id);
+        const chip = document.createElement('div');
+        chip.className = 'folder-chat-chip' + (included ? ' active' : '');
+        chip.dataset.id = id;
+        chip.innerHTML = '<span>' + name + '</span>' + (included ? '<i class="fas fa-check"></i>' : '');
+        chip.onclick = () => {
+            const idx = f.chatIds.indexOf(id);
+            if (idx > -1) { f.chatIds.splice(idx, 1); chip.className = 'folder-chat-chip'; chip.innerHTML = '<span>' + name + '</span>'; }
+            else { f.chatIds.push(id); chip.className = 'folder-chat-chip active'; chip.innerHTML = '<span>' + name + '</span><i class="fas fa-check"></i>'; }
+        };
+        chatsList.appendChild(chip);
+    });
+
+    sheet.querySelector('#folderSave').onclick = () => {
+        const name = sheet.querySelector('#folderName').value.trim();
+        if (!name) return showCustomAlert('Введите название');
+        f.name = name;
+        f.emoji = sheet.querySelector('#folderEmoji').value;
+        if (isNew) folders.push(f);
+        else { const i = folders.findIndex(x => x.id === f.id); if (i > -1) folders[i] = f; }
+        saveFolders();
+        overlay.remove();
+        if (onDone) onDone();
+        renderChatList();
+        openFolderManager();
+    };
+}
+
+function saveFolders() {
+    localStorage.setItem('quark_folders', JSON.stringify(folders));
 }
 
 // ==================== STORIES ====================
@@ -3719,6 +3933,155 @@ function openPhotoCaptionDialog(file) {
 
 // Bottom sheet listing every chat you can forward into: your DMs, your
 // groups, channels you admin, and the general chat.
+// ==================== ADMIN PANEL ====================
+function renderAdminPanel() {
+    const body = $('#adminBody');
+    if (!body) return;
+    body.innerHTML = '';
+
+    const section = (title) => {
+        const el = document.createElement('div');
+        el.className = 'section-label first';
+        el.style.marginLeft = '16px';
+        el.textContent = title;
+        body.appendChild(el);
+    };
+
+    const card = (html) => {
+        const el = document.createElement('div');
+        el.className = 'settings-group';
+        el.innerHTML = html;
+        body.appendChild(el);
+        return el;
+    };
+
+    // Stats
+    section('Статистика');
+    const stats = card('');
+    const statRow = (icon, color, label, val) => {
+        const r = document.createElement('div');
+        r.className = 'settings-row';
+        r.innerHTML = '<div class="settings-left"><div class="settings-icon" style="background:' + color + '20;color:' + color + '"><i class="fas ' + icon + '"></i></div><span class="settings-text">' + label + '</span></div><span class="settings-value" style="font-weight:700;">' + val + '</span>';
+        return r;
+    };
+    stats.appendChild(statRow('fa-users', '#3B82F6', 'Пользователей', Object.keys(allUsers).length));
+    stats.appendChild(statRow('fa-comments', '#10B981', 'Чатов / каналов', Object.keys(allChats).length));
+
+    // Verify / Unverify user or chat
+    section('Галочка подтверждения');
+    const vCard = card(
+        '<div class="settings-row"><div class="settings-left" style="flex:1;">' +
+        '<input type="text" class="form-input" id="adminSearchInput" placeholder="@username или название" style="width:100%;"></div></div>' +
+        '<div class="settings-row"><div class="settings-left"><div class="settings-icon" style="background:#6C63FF20;color:#6C63FF;"><i class="fas fa-user-check"></i></div><span class="settings-text">Выдать / снять галочку</span></div></div>' +
+        '<div id="adminSearchResults" style="padding:0 16px 10px;"></div>'
+    );
+
+    const searchInput = vCard.querySelector('#adminSearchInput');
+    const results = vCard.querySelector('#adminSearchResults');
+
+    const doSearch = () => {
+        const q = searchInput.value.trim().replace('@', '').toLowerCase();
+        results.innerHTML = '';
+        if (!q) return;
+
+        const found = [];
+        // Search users
+        Object.values(allUsers).forEach(u => {
+            if ((u.displayName || '').toLowerCase().includes(q) || (u.username || '').toLowerCase().includes(q)) {
+                found.push({ type: 'user', obj: u });
+            }
+        });
+        // Search chats
+        Object.values(allChats).forEach(ch => {
+            if ((ch.name || '').toLowerCase().includes(q) || (ch.username || '').toLowerCase().includes(q)) {
+                found.push({ type: 'chat', obj: ch });
+            }
+        });
+
+        if (!found.length) {
+            results.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:4px 0;">Ничего не найдено</div>';
+            return;
+        }
+
+        found.slice(0, 10).forEach(({ type, obj }) => {
+            const name = obj.displayName || obj.name || 'Без имени';
+            const isVerified = !!obj.verified;
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--glass-border);';
+            row.innerHTML = '<div class="avatar" style="width:32px;height:32px;font-size:12px;flex-shrink:0;">' +
+                (obj.avatarUrl ? '<img src="' + obj.avatarUrl + '">' : initials(name)) + '</div>' +
+                '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13.5px;">' + name + (isVerified ? ' ✅' : '') + '</div>' +
+                '<div style="font-size:11.5px;color:var(--text-secondary);">' + type + (obj.username ? ' · @' + obj.username : '') + '</div></div>';
+
+            const btn = document.createElement('button');
+            btn.className = 'btn';
+            btn.style.cssText = 'font-size:12px;padding:5px 12px;flex-shrink:0;' + (isVerified ? 'background:var(--danger);color:white;' : 'background:var(--primary);color:white;');
+            btn.textContent = isVerified ? 'Снять' : 'Выдать';
+            btn.onclick = async () => {
+                const col = type === 'user' ? 'users' : 'chats';
+                const id = obj.id || obj.uid;
+                try {
+                    await db.collection(col).doc(id).update({ verified: !isVerified });
+                    obj.verified = !isVerified;
+                    doSearch();
+                    renderChatList();
+                } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
+            };
+            row.appendChild(btn);
+            results.appendChild(row);
+        });
+    };
+
+    searchInput.oninput = doSearch;
+
+    // Ban / delete user
+    section('Управление пользователями');
+    const banCard = card(
+        '<div class="settings-row"><div class="settings-left" style="flex:1;">' +
+        '<input type="text" class="form-input" id="adminBanInput" placeholder="@username или email" style="width:100%;"></div></div>' +
+        '<div class="settings-row" id="adminBanBtn" style="cursor:pointer;">' +
+        '<div class="settings-left"><div class="settings-icon" style="background:#EF444420;color:#EF4444;"><i class="fas fa-ban"></i></div>' +
+        '<span class="settings-text" style="color:#EF4444;">Заблокировать пользователя</span></div></div>'
+    );
+    banCard.querySelector('#adminBanBtn').onclick = async () => {
+        const q = banCard.querySelector('#adminBanInput').value.trim().replace('@', '');
+        const found = Object.values(allUsers).find(u => (u.username || '').toLowerCase() === q.toLowerCase() || (u.email || '').toLowerCase() === q.toLowerCase());
+        if (!found) return showCustomAlert('Пользователь не найден');
+        showCustomConfirm('Заблокировать ' + (found.displayName || found.username) + '?', async () => {
+            try {
+                await db.collection('users').doc(found.id || found.uid).update({ banned: true });
+                showCustomAlert('✅ Заблокирован');
+            } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
+        });
+    };
+
+    // Broadcast message
+    section('Системное сообщение');
+    const bcCard = card(
+        '<div class="settings-row"><div class="settings-left" style="flex:1;">' +
+        '<input type="text" class="form-input" id="adminBcInput" placeholder="Текст системного сообщения..." style="width:100%;"></div></div>' +
+        '<div class="settings-row" id="adminBcBtn" style="cursor:pointer;">' +
+        '<div class="settings-left"><div class="settings-icon" style="background:#F59E0B20;color:#F59E0B;"><i class="fas fa-bullhorn"></i></div>' +
+        '<span class="settings-text">Отправить всем в общий чат</span></div></div>'
+    );
+    bcCard.querySelector('#adminBcBtn').onclick = async () => {
+        const text = bcCard.querySelector('#adminBcInput').value.trim();
+        if (!text) return;
+        try {
+            await db.collection('messages').add({
+                text: '📢 [Системное] ' + text,
+                userId: currentUser.uid,
+                chatId: GENERAL_CHAT_ID,
+                readBy: [],
+                reactions: {},
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            bcCard.querySelector('#adminBcInput').value = '';
+            showCustomAlert('✅ Отправлено');
+        } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
+    };
+}
+
 function openForwardPicker(msg, originName) {
     const ids = new Set([...activeChats, ...myChatIds, GENERAL_CHAT_ID]);
     const targets = [];
@@ -5321,6 +5684,15 @@ function setupListeners() {
     $('#replyClose').onclick = cancelReply;
 
     $('#settLogout').onclick = logout;
+
+    if (ADMIN_EMAILS.includes(currentUser?.email)) {
+        const adminRow = $('#adminPanelRow');
+        if (adminRow) {
+            adminRow.classList.remove('hidden');
+            adminRow.onclick = () => { renderAdminPanel(); showScreen('screenAdmin'); };
+        }
+    }
+    $('#adminBackBtn').onclick = () => showScreen('screenSettings');
     $('#switchAccountRow').onclick = showAccountSwitcher;
 
     $('#darkRow').onclick = () => {
