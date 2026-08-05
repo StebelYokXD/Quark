@@ -368,8 +368,11 @@ body {
 .chat-scroll {
     flex: 1;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior-y: contain;
+    overscroll-behavior-x: none;
     padding: calc(4px * var(--ui-scale, 1)) 0;
+    /* Ensure stories/search don't bounce when content is shorter than the scroll area */
+    min-height: 0;
 }
 
 .search-box {
@@ -3726,3 +3729,118 @@ body {
     height: calc(36px * var(--ui-scale, 1));
     font-size: calc(13px * var(--ui-scale, 1));
 }
+
+/* ==================== TG-STYLE MESSAGE MENU ==================== */
+.msg-menu-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 250;
+    animation: fadeIn 0.12s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.msg-menu-react-strip {
+    background: var(--glass);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid var(--glass-border);
+    border-radius: calc(28px * var(--ui-scale, 1));
+    padding: calc(6px * var(--ui-scale, 1)) calc(10px * var(--ui-scale, 1));
+    display: flex;
+    gap: calc(2px * var(--ui-scale, 1));
+    overflow-x: auto;
+    max-width: calc(100vw - 16px);
+    box-shadow: var(--shadow-lg);
+    scrollbar-width: none;
+    animation: pop 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.msg-menu-react-strip::-webkit-scrollbar { display: none; }
+
+.msg-menu-react-btn {
+    font-size: calc(22px * var(--ui-scale, 1));
+    flex-shrink: 0;
+    padding: calc(3px * var(--ui-scale, 1));
+    border-radius: calc(8px * var(--ui-scale, 1));
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.msg-menu-react-btn:active {
+    transform: scale(1.3);
+}
+
+.msg-menu-actions {
+    background: var(--glass);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid var(--glass-border);
+    border-radius: calc(16px * var(--ui-scale, 1));
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    min-width: calc(200px * var(--ui-scale, 1));
+    animation: pop 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.msg-menu-action {
+    display: flex;
+    align-items: center;
+    gap: calc(12px * var(--ui-scale, 1));
+    padding: calc(13px * var(--ui-scale, 1)) calc(16px * var(--ui-scale, 1));
+    font-size: calc(14px * var(--ui-scale, 1));
+    color: var(--text);
+    cursor: pointer;
+    border-bottom: 1px solid var(--glass-border);
+    transition: background 0.1s ease;
+}
+
+.msg-menu-action:last-child {
+    border-bottom: none;
+}
+
+.msg-menu-action:active {
+    background: var(--surface);
+}
+
+.msg-menu-action i {
+    width: calc(18px * var(--ui-scale, 1));
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: calc(15px * var(--ui-scale, 1));
+    flex-shrink: 0;
+}
+
+.msg-menu-action.danger {
+    color: var(--danger);
+}
+
+.msg-menu-action.danger i {
+    color: var(--danger);
+}
+
+.msg-menu-sep {
+    height: 1px;
+    background: var(--glass-border);
+}
+
+/* Comment emoji strip */
+.comment-emoji-strip {
+    display: flex;
+    gap: calc(3px * var(--ui-scale, 1));
+    overflow-x: auto;
+    padding: calc(6px * var(--ui-scale, 1)) calc(4px * var(--ui-scale, 1));
+    scrollbar-width: none;
+    background: var(--surface);
+    border-radius: calc(12px * var(--ui-scale, 1));
+    margin: calc(4px * var(--ui-scale, 1)) 0;
+    animation: pop 0.12s ease;
+}
+
+.comment-emoji-strip::-webkit-scrollbar { display: none; }

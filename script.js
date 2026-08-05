@@ -749,12 +749,12 @@ function buildMainUI() {
                 <div class="stories-row-bg"></div>
                 <div class="stories-row-content" id="storiesRowContent"></div>
             </div>
+            <div class="folder-tabs-wrap" id="folderTabsWrap">
+                <div class="folder-tabs" id="folderTabs"></div>
+            </div>
             <div class="chat-scroll">
                 <div class="search-box">
                     <div class="search-wrapper"><i class="fas fa-search"></i><input type="text" class="search-input" id="searchInput" placeholder="Поиск людей, групп, каналов..."></div>
-                </div>
-                <div class="folder-tabs-wrap" id="folderTabsWrap">
-                    <div class="folder-tabs" id="folderTabs"></div>
                 </div>
                 <div id="chatList"></div>
             </div>
@@ -1020,7 +1020,7 @@ function renderOwnProfile() {
         currentProfile = { ...currentProfile, ...data };
         renderOwnProfile();
         renderChatList();
-        showCustomAlert('✅ Сохранено');
+        showCustomAlert('Сохранено');
     };
 
     if (!_profAvatarInput) {
@@ -1241,7 +1241,7 @@ async function loadChatPreview(id, cid) {
         messageCache[cid] = msgs;
         if (msgs.length > 0) {
             const last = msgs[msgs.length - 1];
-            lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : last.audioUrl ? '🎤 Голосовое' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
+            lastMessagePreviews[id] = last.sticker ? 'Стикер' : last.audioUrl ? 'Голосовое' : (last.imageUrl ? 'Фото' : (last.text || '').substring(0, 30));
             const ts = last.timestamp?.toDate();
             if (ts) lastMessageTimes[id] = ts.getTime();
             renderChatList();
@@ -1280,7 +1280,16 @@ function buildChatRow(id, isGroup, meta) {
         '<div class="chat-time">' + formatTime(time) + '</div>' +
         (unread > 0 ? '<div class="chat-unread-badge">' + (unread > 99 ? '99+' : unread) + '</div>' : '') +
         '</div>';
-    div.querySelector('.chat-preview').textContent = preview;
+    const previewEl = div.querySelector('.chat-preview');
+    if (preview === 'Фото') {
+        previewEl.innerHTML = '<i class="fas fa-image" style="font-size:11px;margin-right:3px;opacity:0.7;"></i>Фото';
+    } else if (preview === 'Голосовое') {
+        previewEl.innerHTML = '<i class="fas fa-microphone" style="font-size:11px;margin-right:3px;opacity:0.7;"></i>Голосовое';
+    } else if (preview === 'Стикер') {
+        previewEl.innerHTML = '<i class="fas fa-sticky-note" style="font-size:11px;margin-right:3px;opacity:0.7;"></i>Стикер';
+    } else {
+        previewEl.textContent = preview;
+    }
     div.onclick = () => { unreadCounts[id] = 0; openChat(id); };
     return div;
 }
@@ -1914,9 +1923,12 @@ function openStoryViewer(uid) {
                 document.querySelectorAll('.story-quick-emoji-popup').forEach(p => p.remove());
                 const popup = document.createElement('div');
                 popup.className = 'story-quick-emoji-popup';
-                QUICK_EMOJIS.forEach(emoji => {
+                // Horizontal scrollable strip, NOT a wrap grid
+                popup.style.cssText = 'position:absolute;bottom:calc(52px * var(--ui-scale,1));left:50%;transform:translateX(-50%);display:flex;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:4px;padding:8px 12px;border-radius:28px;background:rgba(30,30,30,0.92);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:0 4px 20px rgba(0,0,0,0.4);max-width:calc(100vw - 32px);scrollbar-width:none;z-index:5;';
+                ALL_REACTIONS.forEach(emoji => {
                     const chip = document.createElement('span');
                     chip.className = 'story-quick-emoji-popup-item';
+                    chip.style.cssText = 'flex-shrink:0;font-size:22px;cursor:pointer;padding:2px;border-radius:8px;transition:transform 0.1s;';
                     chip.textContent = emoji;
                     chip.onclick = (e) => {
                         e.stopPropagation();
@@ -1926,7 +1938,8 @@ function openStoryViewer(uid) {
                     };
                     popup.appendChild(chip);
                 });
-                heartBtn.appendChild(popup);
+                // Tap outside to dismiss
+                overlay.appendChild(popup);
                 setTimeout(() => {
                     document.addEventListener('click', function closeP(ev) {
                         if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', closeP); }
@@ -2372,7 +2385,7 @@ function renderComments(listEl, items, handlers) {
             body.appendChild(reactRow);
         }
 
-        // Action row: Reply + react-emoji button
+        // Action row: Reply button + expandable quick-react button
         const actionRow = document.createElement('div');
         actionRow.className = 'comment-action-row';
         const replyBtn = document.createElement('span');
@@ -2381,17 +2394,30 @@ function renderComments(listEl, items, handlers) {
         replyBtn.onclick = () => handlers && handlers.onReply(c);
         actionRow.appendChild(replyBtn);
 
-        // Quick emoji reactions under comment
-        const emojiRow = document.createElement('div');
-        emojiRow.className = 'comment-emoji-row';
-        ALL_REACTIONS.slice(0, 6).forEach(emoji => {
-            const e = document.createElement('span');
-            e.className = 'comment-emoji-btn';
-            e.textContent = emoji;
-            e.onclick = () => handlers && handlers.onReact(c, emoji);
-            emojiRow.appendChild(e);
-        });
-        actionRow.appendChild(emojiRow);
+        // "+ Реакция" expander — shows a scrollable strip on tap
+        const reactTrigger = document.createElement('span');
+        reactTrigger.className = 'comment-action-btn';
+        reactTrigger.innerHTML = '<i class="fas fa-face-smile"></i> Реакция';
+        reactTrigger.onclick = (ev) => {
+            ev.stopPropagation();
+            document.querySelectorAll('.comment-emoji-strip').forEach(s => s.remove());
+            const strip = document.createElement('div');
+            strip.className = 'comment-emoji-strip';
+            ALL_REACTIONS.forEach(emoji => {
+                const btn = document.createElement('span');
+                btn.className = 'comment-emoji-btn';
+                btn.textContent = emoji;
+                btn.onclick = (e) => { e.stopPropagation(); handlers && handlers.onReact(c, emoji); strip.remove(); };
+                strip.appendChild(btn);
+            });
+            actionRow.parentNode.insertBefore(strip, actionRow.nextSibling);
+            setTimeout(() => {
+                document.addEventListener('click', function close(e) {
+                    if (!strip.contains(e.target) && e.target !== reactTrigger) { strip.remove(); document.removeEventListener('click', close); }
+                });
+            }, 50);
+        };
+        actionRow.appendChild(reactTrigger);
         body.appendChild(actionRow);
 
         row.appendChild(av);
@@ -2766,7 +2792,7 @@ function applyMessageChanges(changes, cid) {
     const chatKeyId = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
     if (chatKeyId && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        lastMessagePreviews[chatKeyId] = last.sticker ? '🎨 Стикер' : last.audioUrl ? '🎤 Голосовое' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
+        lastMessagePreviews[chatKeyId] = last.sticker ? 'Стикер' : last.audioUrl ? 'Голосовое' : (last.imageUrl ? 'Фото' : (last.text || '').substring(0, 30));
         const ts = last.timestamp && last.timestamp.toDate ? last.timestamp.toDate() : null;
         if (ts) lastMessageTimes[chatKeyId] = ts.getTime();
         renderChatList();
@@ -2811,7 +2837,7 @@ function renderMessagesSnapshot(snap, cid) {
     const id = isGroupLike(currentChat) ? currentChat : otherDmUid(cid);
     if (id && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        lastMessagePreviews[id] = last.sticker ? '🎨 Стикер' : last.audioUrl ? '🎤 Голосовое' : (last.imageUrl ? '📷 Фото' : (last.text || '').substring(0, 30));
+        lastMessagePreviews[id] = last.sticker ? 'Стикер' : last.audioUrl ? 'Голосовое' : (last.imageUrl ? 'Фото' : (last.text || '').substring(0, 30));
         const ts = last.timestamp?.toDate();
         if (ts) lastMessageTimes[id] = ts.getTime();
         renderChatList();
@@ -2891,7 +2917,7 @@ function handleIncomingChanges(changes) {
         // Always update preview and time — even for your own messages, so
         // the preview in the chat list always shows the latest message
         // regardless of who sent it.
-        const previewText = msg.sticker ? '🎨 Стикер' : msg.audioUrl ? '🎤 Голосовое' : (msg.imageUrl ? '📷 Фото' : (msg.text || '').substring(0, 30));
+        const previewText = msg.sticker ? 'Стикер' : msg.audioUrl ? 'Голосовое' : (msg.imageUrl ? 'Фото' : (msg.text || '').substring(0, 30));
         const msgTime = toMillis(msg.timestamp);
         if (!lastMessageTimes[id] || msgTime > lastMessageTimes[id]) {
             lastMessagePreviews[id] = previewText;
@@ -2973,9 +2999,10 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     });
 
     // Swipe-to-reply: swipe toward the bubble's own side (right for a
-    // received message on the left, left for a sent one on the right) —
-    // same gesture Telegram/WhatsApp use, as an alternative to the menu.
+    // Swipe-to-reply: disabled entirely in channels for non-admins since
+    // they can't send messages at all.
     (function setupSwipeReply() {
+        if (isChannel && !(allChats[cid] && (allChats[cid].admins || []).includes(currentUser.uid))) return;
         const allowedDir = isMine ? -1 : 1;
         const threshold = 58;
         const maxDrag = 72;
@@ -3328,138 +3355,117 @@ const ALL_REACTIONS = [
 ];
 
 function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
-    document.querySelectorAll('.msg-context-menu').forEach(m => m.remove());
+    document.querySelectorAll('.msg-menu-overlay').forEach(m => m.remove());
 
     const canDelete = isMine || (allChats[currentChat] && (allChats[currentChat].admins || []).includes(currentUser.uid));
     const canPin = canPinIn(currentChat);
     const isPinned = currentPinnedIds.has(msg.id);
 
-    const menu = document.createElement('div');
-    menu.className = 'msg-context-menu';
-    menu.addEventListener('pointerdown', e => e.preventDefault());
+    // Full-screen dimmed overlay like Telegram — the bubble stays in its
+    // original position, we just dim everything around it and show the
+    // reaction bar + action list stacked below it.
+    const overlay = document.createElement('div');
+    overlay.className = 'msg-menu-overlay';
+    overlay.addEventListener('pointerdown', e => e.preventDefault());
 
-    const rect = wrapper.getBoundingClientRect();
-    if (rect.top < 320) {
-        menu.style.top = '100%';
-        menu.style.bottom = 'auto';
-        menu.style.marginTop = '5px';
-    } else {
-        menu.style.bottom = '100%';
-        menu.style.top = 'auto';
-        menu.style.marginBottom = '5px';
-    }
-    if (isMine) {
-        menu.style.right = '0';
-        menu.style.left = 'auto';
-    } else {
-        menu.style.left = '0';
-        menu.style.right = 'auto';
-    }
+    // Clone the bubble to show it in the overlay at its original position
+    const wRect = wrapper.getBoundingClientRect();
+    const clone = wrapper.cloneNode(true);
+    clone.style.cssText = 'position:fixed;top:' + wRect.top + 'px;left:' + wRect.left + 'px;width:' + wRect.width + 'px;pointer-events:none;z-index:2;';
+    overlay.appendChild(clone);
 
-    // --- Reactions: one row visible, "..." expands the rest ---
-    const reactionsWrap = document.createElement('div');
-    reactionsWrap.className = 'mcm-reactions-wrap';
-    reactionsWrap.addEventListener('pointerdown', e => e.preventDefault());
-
-    const reactionsGrid = document.createElement('div');
-    reactionsGrid.className = 'mcm-reactions';
+    // Reaction strip
+    const reactStrip = document.createElement('div');
+    reactStrip.className = 'msg-menu-react-strip';
+    reactStrip.addEventListener('pointerdown', e => e.stopPropagation());
     ALL_REACTIONS.forEach(emoji => {
-        const emojiBtn = document.createElement('span');
-        emojiBtn.className = 'reaction-emoji-btn';
-        emojiBtn.textContent = emoji;
-        emojiBtn.onclick = function (e) {
+        const btn = document.createElement('span');
+        btn.className = 'msg-menu-react-btn';
+        btn.textContent = emoji;
+        btn.onclick = (e) => {
             e.stopPropagation();
             toggleReaction(msg, emoji);
-            menu.remove();
+            overlay.remove();
         };
-        reactionsGrid.appendChild(emojiBtn);
+        reactStrip.appendChild(btn);
     });
-    reactionsWrap.appendChild(reactionsGrid);
 
-    const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'mcm-reaction-toggle';
-    toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
-    toggleBtn.onclick = function (e) {
-        e.stopPropagation();
-        const expanded = reactionsGrid.classList.toggle('expanded');
-        toggleBtn.innerHTML = expanded ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
-    };
-    reactionsWrap.appendChild(toggleBtn);
-    menu.appendChild(reactionsWrap);
+    // Actions list
+    const actionsList = document.createElement('div');
+    actionsList.className = 'msg-menu-actions';
+    actionsList.addEventListener('pointerdown', e => e.stopPropagation());
 
-    // --- Actions: compact icon-only row ---
-    const actions = document.createElement('div');
-    actions.className = 'mcm-actions';
-
-    const makeActionBtn = (icon, label, onClick, danger) => {
-        const btn = document.createElement('button');
-        btn.className = 'mcm-action-btn' + (danger ? ' danger' : '');
-        btn.title = label;
+    const makeAction = (icon, label, onClick, danger) => {
+        const btn = document.createElement('div');
+        btn.className = 'msg-menu-action' + (danger ? ' danger' : '');
         btn.innerHTML = '<i class="fas ' + icon + '"></i><span>' + label + '</span>';
-        btn.onclick = function (e) {
-            e.stopPropagation();
-            onClick();
-            menu.remove();
-        };
+        btn.onclick = (e) => { e.stopPropagation(); overlay.remove(); onClick(); };
         return btn;
     };
 
-    actions.appendChild(makeActionBtn('fa-reply', 'Ответить', () => {
+    actionsList.appendChild(makeAction('fa-reply', 'Ответить', () => {
         const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[msg.userId]?.displayName || 'Пользователь'));
         setReply(msg.id, msg.text, senderName);
     }));
 
     if (isMine && msg.text && !msg.imageUrl && !msg.audioUrl) {
-        actions.appendChild(makeActionBtn('fa-pen', 'Изменить', () => {
-            startEditMessage(msg, cid);
-        }));
+        actionsList.appendChild(makeAction('fa-pen', 'Изменить', () => startEditMessage(msg, cid)));
     }
 
     if (msg.text) {
-        actions.appendChild(makeActionBtn('fa-copy', 'Копировать', () => {
-            navigator.clipboard.writeText(msg.text).catch(() => {});
-        }));
+        actionsList.appendChild(makeAction('fa-copy', 'Копировать', () => navigator.clipboard.writeText(msg.text).catch(() => {})));
     }
 
-    actions.appendChild(makeActionBtn('fa-share', 'Переслать', () => {
+    actionsList.appendChild(makeAction('fa-share', 'Переслать', () => {
         openForwardPicker(msg, isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (allUsers[msg.userId] ? allUsers[msg.userId].displayName : 'Пользователь'));
     }));
 
     if (canPin) {
-        actions.appendChild(makeActionBtn('fa-thumbtack', isPinned ? 'Открепить' : 'Закрепить', () => {
-            togglePinMessage(msg, cid);
-        }));
+        actionsList.appendChild(makeAction('fa-thumbtack', isPinned ? 'Открепить' : 'Закрепить', () => togglePinMessage(msg, cid)));
     }
 
     if (canDelete) {
-        actions.appendChild(makeActionBtn('fa-trash', 'Удалить', () => {
-            showCustomConfirm('Удалить сообщение?', async function () {
+        const sep = document.createElement('div');
+        sep.className = 'msg-menu-sep';
+        actionsList.appendChild(sep);
+        actionsList.appendChild(makeAction('fa-trash', 'Удалить', () => {
+            showCustomConfirm('Удалить сообщение?', async () => {
                 await db.collection('messages').doc(msg.id).delete();
                 if (currentPinnedIds.has(msg.id)) {
                     db.collection('chatMeta').doc(cid).set({ pinnedMessages: firebase.firestore.FieldValue.arrayRemove(msg.id) }, { merge: true }).catch(() => {});
                 }
                 const idx = messageCache[cid]?.findIndex(x => x.id === msg.id);
                 if (idx > -1) messageCache[cid].splice(idx, 1);
-                wrapper.style.opacity = '0';
-                wrapper.style.transform = 'scale(0.8)';
-                wrapper.style.transition = '0.2s';
+                wrapper.style.opacity = '0'; wrapper.style.transform = 'scale(0.8)'; wrapper.style.transition = '0.2s';
                 setTimeout(() => wrapper.remove(), 200);
             });
         }, true));
     }
 
-    menu.appendChild(actions);
+    // Position: reaction strip above bubble if there's room, else below.
+    // Actions list always below the bubble.
+    const REACT_H = 54, ACTIONS_H = Math.min(canDelete ? 7 : 5, 7) * 44;
+    const spaceBelow = window.innerHeight - wRect.bottom;
+    const spaceAbove = wRect.top;
 
-    wrapper.appendChild(menu);
+    let reactTop, actionsTop;
+    if (spaceAbove >= REACT_H + 8) {
+        reactTop = wRect.top - REACT_H - 8;
+    } else {
+        reactTop = wRect.bottom + 8;
+    }
+    actionsTop = Math.min(wRect.bottom + 8, window.innerHeight - ACTIONS_H - 16);
 
-    setTimeout(() => {
-        document.addEventListener('click', function closeMenu(e) {
-            if (!menu.contains(e.target) && e.target !== wrapper) {
-                menu.remove();
-                document.removeEventListener('click', closeMenu);
-            }
-        });
-    }, 100);
+    reactStrip.style.cssText = 'position:fixed;top:' + reactTop + 'px;' + (isMine ? 'right:8px;' : 'left:8px;') + 'z-index:3;';
+    actionsList.style.cssText = 'position:fixed;top:' + actionsTop + 'px;' + (isMine ? 'right:8px;' : 'left:8px;') + 'z-index:3;';
+
+    overlay.appendChild(reactStrip);
+    overlay.appendChild(actionsList);
+    document.body.appendChild(overlay);
+
+    overlay.onclick = (e) => {
+        if (e.target === overlay) overlay.remove();
+    };
 }
 
 let editingMsgId = null;
@@ -4122,16 +4128,20 @@ function renderAdminPanel() {
             const name = obj.displayName || obj.name || 'Без имени';
             const isVerified = !!obj.verified;
             const row = document.createElement('div');
-            row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--glass-border);';
-            row.innerHTML = '<div class="avatar" style="width:32px;height:32px;font-size:12px;flex-shrink:0;">' +
-                (obj.avatarUrl ? '<img src="' + obj.avatarUrl + '">' : initials(name)) + '</div>' +
-                '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13.5px;">' + name + (isVerified ? ' ✅' : '') + '</div>' +
-                '<div style="font-size:11.5px;color:var(--text-secondary);">' + type + (obj.username ? ' · @' + obj.username : '') + '</div></div>';
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--glass-border);';
+            const av = document.createElement('div');
+            av.className = 'avatar';
+            av.style.cssText = 'width:28px;height:28px;font-size:11px;flex-shrink:0;';
+            av.innerHTML = obj.avatarUrl ? '<img src="' + obj.avatarUrl + '">' : initials(name);
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1;min-width:0;';
+            info.innerHTML = '<div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + name + (isVerified ? ' <i class="fas fa-check-circle" style="color:#29A9EA;font-size:11px;"></i>' : '') + '</div>' +
+                '<div style="font-size:11px;color:var(--text-secondary);">' + (type === 'user' ? 'Пользователь' : type) + (obj.username ? ' · @' + obj.username : '') + '</div>';
 
             const btn = document.createElement('button');
-            btn.className = 'btn';
-            btn.style.cssText = 'font-size:12px;padding:5px 12px;flex-shrink:0;' + (isVerified ? 'background:var(--danger);color:white;' : 'background:var(--primary);color:white;');
-            btn.textContent = isVerified ? 'Снять' : 'Выдать';
+            btn.style.cssText = 'font-size:11px;padding:3px 10px;border-radius:12px;border:none;flex-shrink:0;cursor:pointer;font-weight:600;' +
+                (isVerified ? 'background:var(--danger);color:white;' : 'background:var(--primary);color:white;');
+            btn.innerHTML = isVerified ? '<i class="fas fa-times"></i> Снять' : '<i class="fas fa-check"></i> Выдать';
             btn.onclick = async () => {
                 const col = type === 'user' ? 'users' : 'chats';
                 const id = obj.id || obj.uid;
@@ -4142,6 +4152,8 @@ function renderAdminPanel() {
                     renderChatList();
                 } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
             };
+            row.appendChild(av);
+            row.appendChild(info);
             row.appendChild(btn);
             results.appendChild(row);
         });
@@ -4165,7 +4177,7 @@ function renderAdminPanel() {
         showCustomConfirm('Заблокировать ' + (found.displayName || found.username) + '?', async () => {
             try {
                 await db.collection('users').doc(found.id || found.uid).update({ banned: true });
-                showCustomAlert('✅ Заблокирован');
+                showCustomAlert('Заблокирован');
             } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
         });
     };
@@ -4192,7 +4204,7 @@ function renderAdminPanel() {
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             bcCard.querySelector('#adminBcInput').value = '';
-            showCustomAlert('✅ Отправлено');
+            showCustomAlert('Отправлено');
         } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
     };
 }
@@ -5473,7 +5485,7 @@ function showChatInfo(id) {
                 meta.name = name;
                 meta.username = username || '';
                 meta.description = description || '';
-                showCustomAlert('✅ Сохранено');
+                showCustomAlert('Сохранено');
                 render();
             };
 
@@ -5867,6 +5879,22 @@ function setupListeners() {
     };
     $('#vibrationRow').onclick = vibFn;
     $('#vibrationToggle').onclick = vibFn;
+
+    // Close sticker panel and attach menu whenever keyboard shows
+    const vv = window.visualViewport;
+    if (vv) {
+        let lastVh = vv.height;
+        vv.addEventListener('resize', () => {
+            // Keyboard opened (viewport shrunk significantly) — close panels
+            if (vv.height < lastVh - 100) {
+                const panel = document.getElementById('stickerPanel');
+                if (panel) { panel.remove(); stickerPanelOpen = false; }
+                const attachMenu = $('#attachMenu');
+                if (attachMenu) attachMenu.classList.remove('show');
+            }
+            lastVh = vv.height;
+        }, { passive: true });
+    }
 
     const scaleUpBtn = $('#scaleUpBtn');
     if (scaleUpBtn) scaleUpBtn.onclick = () => {
