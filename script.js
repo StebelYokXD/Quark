@@ -54,6 +54,8 @@ let quickReactionEmoji = localStorage.getItem('quark_quick_reaction') || '👍';
 let accentTheme = localStorage.getItem('quark_accent') || 'purple';
 let amoledMode = localStorage.getItem('quark_amoled') === '1';
 let chatWallpaper = localStorage.getItem('quark_wallpaper') || null;
+let compactMode = localStorage.getItem('quark_compact') === '1';
+let vibrationEnabled = localStorage.getItem('quark_vibration') !== '0';
 let myStickers = [];
 let unsubscribeStickers = null;
 let fontSize = localStorage.getItem('quark_font') || 'medium';
@@ -328,6 +330,7 @@ const ACCENT_THEMES = ['purple', 'blue', 'green', 'pink', 'orange', 'teal', 'red
 const ACCENT_COLORS = { purple: '#7C4DFF', blue: '#2F80ED', green: '#10B981', pink: '#EC4899', orange: '#F97316', teal: '#14B8A6', red: '#EF4444' };
 
 function applyTheme() {
+    applyPresetTheme();
     const app = $('#app');
     if (app) {
         if (darkMode) {
@@ -337,14 +340,11 @@ function applyTheme() {
             app.classList.remove('dark-theme');
             document.body.classList.remove('dark-theme');
         }
+        // Remove old accent classes (superseded by preset themes)
         ACCENT_THEMES.forEach(t => {
             app.classList.remove('accent-' + t);
             document.body.classList.remove('accent-' + t);
         });
-        if (accentTheme && accentTheme !== 'purple') {
-            app.classList.add('accent-' + accentTheme);
-            document.body.classList.add('accent-' + accentTheme);
-        }
         app.classList.toggle('amoled-mode', darkMode && amoledMode);
         document.body.classList.toggle('amoled-mode', darkMode && amoledMode);
     }
@@ -352,8 +352,9 @@ function applyTheme() {
     if (dt) dt.classList.toggle('active', darkMode);
     const amt = $('#amoledToggle');
     if (amt) amt.classList.toggle('active', amoledMode);
-    const bg = darkMode ? (amoledMode ? '#000000' : '#0F0F1A') : '#F0EDF7';
-    document.body.style.background = bg;
+    const theme = PRESET_THEMES.find(t => t.id === presetTheme) || PRESET_THEMES[0];
+    const bgVar = darkMode ? (amoledMode ? '#000000' : (theme.dark['--bg'] || '#0F0F1A')) : (theme.light['--bg'] || '#F0EDF7');
+    document.body.style.background = bgVar;
     applyWallpaper();
 }
 
@@ -806,7 +807,7 @@ function buildMainUI() {
                         <div class="toggle" id="amoledToggle"></div>
                     </div>
                     <div class="settings-row" id="accentRow">
-                        <div class="settings-left"><div class="settings-icon" style="background:rgba(124,77,255,0.15);color:#7C4DFF;"><i class="fas fa-palette"></i></div><span class="settings-text">Цвет темы</span></div>
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(124,77,255,0.15);color:#7C4DFF;"><i class="fas fa-palette"></i></div><span class="settings-text">Тема оформления</span></div>
                         <span class="settings-value" id="accentValue">Фиолетовый</span>
                     </div>
                     <div class="settings-row" id="wallpaperRow">
@@ -825,6 +826,14 @@ function buildMainUI() {
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(124,77,255,0.15);color:#7C4DFF;"><i class="fas fa-bolt"></i></div><span class="settings-text">Быстрая реакция (двойной тап)</span></div>
                         <span class="settings-value" id="quickReactionValue">👍</span>
                     </div>
+                    <div class="settings-row" id="sendEnterRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(59,130,246,0.15);color:#3B82F6;"><i class="fas fa-paper-plane"></i></div><span class="settings-text">Enter для отправки (десктоп)</span></div>
+                        <div class="toggle active" id="sendEnterToggle"></div>
+                    </div>
+                    <div class="settings-row" id="compactRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(245,158,11,0.15);color:#F59E0B;"><i class="fas fa-compress-alt"></i></div><span class="settings-text">Компактный режим</span></div>
+                        <div class="toggle" id="compactToggle"></div>
+                    </div>
                 </div>
 
                 <div class="section-label" style="margin-left:4px;">Уведомления</div>
@@ -832,6 +841,10 @@ function buildMainUI() {
                     <div class="settings-row" id="soundRow">
                         <div class="settings-left"><div class="settings-icon" style="background:rgba(16,185,129,0.15);color:#10B981;"><i class="fas fa-volume-up"></i></div><span class="settings-text">Звук уведомлений</span></div>
                         <div class="toggle" id="soundToggle"></div>
+                    </div>
+                    <div class="settings-row" id="vibrationRow">
+                        <div class="settings-left"><div class="settings-icon" style="background:rgba(239,68,68,0.15);color:#EF4444;"><i class="fas fa-mobile-alt"></i></div><span class="settings-text">Вибрация</span></div>
+                        <div class="toggle active" id="vibrationToggle"></div>
                     </div>
                 </div>
 
@@ -930,7 +943,11 @@ function buildMainUI() {
     const pt = $('#privateProfileToggle'); if (pt) pt.classList.toggle('active', !!(currentProfile && currentProfile.privateProfile));
     const sft = $('#storyForwardToggle'); if (sft) sft.classList.toggle('active', (currentProfile && currentProfile.allowStoryForward) !== false);
     const fv = $('#fontValue'); if (fv) fv.textContent = { small: 'Мелкий', medium: 'Средний', large: 'Крупный' }[fontSize] || 'Средний';
-    const av = $('#accentValue'); if (av) av.textContent = { purple: 'Фиолетовый', blue: 'Синий', green: 'Зелёный', pink: 'Розовый', orange: 'Оранжевый', teal: 'Бирюзовый', red: 'Красный' }[accentTheme] || 'Фиолетовый';
+    const av = $('#accentValue');
+    if (av) {
+        const t = PRESET_THEMES.find(t => t.id === presetTheme);
+        av.textContent = t ? t.name : 'Фиолетовый';
+    }
     const wv = $('#wallpaperValue'); if (wv) wv.textContent = chatWallpaper ? 'Своё изображение' : 'По умолчанию';
     const qrv = $('#quickReactionValue'); if (qrv) qrv.textContent = quickReactionEmoji;
 
@@ -3007,7 +3024,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
             if (Math.abs(currentDx) >= threshold) {
                 const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[m.userId]?.displayName || 'Пользователь'));
                 setReply(m.id, m.text, senderName);
-                if (navigator.vibrate) navigator.vibrate(12);
+                if (vibrationEnabled && navigator.vibrate) navigator.vibrate(12);
             }
             currentDx = 0;
         });
@@ -3816,39 +3833,137 @@ function openQuickReactionPicker() {
     document.body.appendChild(overlay);
 }
 
-function openThemePicker() {
-    const names = { purple: 'Фиолетовый', blue: 'Синий', green: 'Зелёный', pink: 'Розовый', orange: 'Оранжевый', teal: 'Бирюзовый', red: 'Красный' };
+// Full preset themes — each defines both light and dark palettes plus an
+// optional chat background. Applied by injecting a <style> tag so they
+// can override any CSS variable without touching the base stylesheet.
+const PRESET_THEMES = [
+    {
+        id: 'purple',
+        name: 'Фиолетовый',
+        swatch: 'linear-gradient(135deg,#7C4DFF,#A78BFA)',
+        light: { '--primary':'#7C4DFF','--primary-dark':'#651FFF','--primary-glow':'rgba(124,77,255,0.4)','--message-out':'#C4B5FD','--bg':'#F0EDF7','--chat-bg':'#E8E3F4' },
+        dark:  { '--primary':'#8B5CF6','--primary-dark':'#7C3AED','--primary-glow':'rgba(139,92,246,0.35)','--message-out':'#3C2A7C','--bg':'#0F0F1A','--chat-bg':'#080812' }
+    },
+    {
+        id: 'midnight',
+        name: 'Midnight',
+        swatch: 'linear-gradient(135deg,#1A1A4E,#4A4AFF)',
+        light: { '--primary':'#4A4AFF','--primary-dark':'#2E2ECC','--primary-glow':'rgba(74,74,255,0.4)','--message-out':'#BFBFFF','--bg':'#EEEEFF','--chat-bg':'#E0E0FF' },
+        dark:  { '--primary':'#6B6BFF','--primary-dark':'#4A4AFF','--primary-glow':'rgba(107,107,255,0.35)','--message-out':'#1A1A6E','--bg':'#08081A','--chat-bg':'#04040E' }
+    },
+    {
+        id: 'ocean',
+        name: 'Океан',
+        swatch: 'linear-gradient(135deg,#0077B6,#00B4D8)',
+        light: { '--primary':'#0077B6','--primary-dark':'#005F92','--primary-glow':'rgba(0,119,182,0.4)','--message-out':'#ADE8F4','--bg':'#E8F4FD','--chat-bg':'#CAE9FF' },
+        dark:  { '--primary':'#00B4D8','--primary-dark':'#0077B6','--primary-glow':'rgba(0,180,216,0.35)','--message-out':'#00415A','--bg':'#080E14','--chat-bg':'#04080D' }
+    },
+    {
+        id: 'forest',
+        name: 'Лес',
+        swatch: 'linear-gradient(135deg,#1B4332,#52B788)',
+        light: { '--primary':'#2D6A4F','--primary-dark':'#1B4332','--primary-glow':'rgba(45,106,79,0.4)','--message-out':'#B7E4C7','--bg':'#EAFAF1','--chat-bg':'#D8F3DC' },
+        dark:  { '--primary':'#52B788','--primary-dark':'#2D6A4F','--primary-glow':'rgba(82,183,136,0.35)','--message-out':'#1B3A28','--bg':'#071008','--chat-bg':'#040A05' }
+    },
+    {
+        id: 'rose',
+        name: 'Роза',
+        swatch: 'linear-gradient(135deg,#BE185D,#F472B6)',
+        light: { '--primary':'#BE185D','--primary-dark':'#9D174D','--primary-glow':'rgba(190,24,93,0.4)','--message-out':'#FBCFE8','--bg':'#FDF2F8','--chat-bg':'#FCE7F3' },
+        dark:  { '--primary':'#F472B6','--primary-dark':'#EC4899','--primary-glow':'rgba(244,114,182,0.35)','--message-out':'#5B1A40','--bg':'#160810','--chat-bg':'#0E050A' }
+    },
+    {
+        id: 'sunset',
+        name: 'Закат',
+        swatch: 'linear-gradient(135deg,#F97316,#FBBF24)',
+        light: { '--primary':'#EA580C','--primary-dark':'#C2410C','--primary-glow':'rgba(234,88,12,0.4)','--message-out':'#FED7AA','--bg':'#FFF7ED','--chat-bg':'#FFEDD5' },
+        dark:  { '--primary':'#FB923C','--primary-dark':'#F97316','--primary-glow':'rgba(251,146,60,0.35)','--message-out':'#5C2E0C','--bg':'#140800','--chat-bg':'#0A0400' }
+    },
+    {
+        id: 'nord',
+        name: 'Nord',
+        swatch: 'linear-gradient(135deg,#2E3440,#88C0D0)',
+        light: { '--primary':'#5E81AC','--primary-dark':'#4C6F9A','--primary-glow':'rgba(94,129,172,0.4)','--message-out':'#B0D0E8','--bg':'#ECEFF4','--chat-bg':'#E5E9F0' },
+        dark:  { '--primary':'#88C0D0','--primary-dark':'#5E81AC','--primary-glow':'rgba(136,192,208,0.35)','--message-out':'#2A3B4D','--bg':'#2E3440','--chat-bg':'#242933' }
+    },
+    {
+        id: 'candy',
+        name: 'Candy',
+        swatch: 'linear-gradient(135deg,#FF6B9D,#C44BFF)',
+        light: { '--primary':'#C44BFF','--primary-dark':'#A020F0','--primary-glow':'rgba(196,75,255,0.4)','--message-out':'#EDBBFF','--bg':'#FDF0FF','--chat-bg':'#F9E0FF' },
+        dark:  { '--primary':'#D070FF','--primary-dark':'#C44BFF','--primary-glow':'rgba(208,112,255,0.35)','--message-out':'#4A0E6E','--bg':'#0F0518','--chat-bg':'#08020D' }
+    },
+    {
+        id: 'mono',
+        name: 'Монохром',
+        swatch: 'linear-gradient(135deg,#374151,#9CA3AF)',
+        light: { '--primary':'#374151','--primary-dark':'#1F2937','--primary-glow':'rgba(55,65,81,0.4)','--message-out':'#D1D5DB','--bg':'#F3F4F6','--chat-bg':'#E5E7EB' },
+        dark:  { '--primary':'#9CA3AF','--primary-dark':'#6B7280','--primary-glow':'rgba(156,163,175,0.35)','--message-out':'#1F2937','--bg':'#111827','--chat-bg':'#0C1017' }
+    },
+];
 
+let presetTheme = localStorage.getItem('quark_preset') || 'purple';
+
+function applyPresetTheme() {
+    const theme = PRESET_THEMES.find(t => t.id === presetTheme) || PRESET_THEMES[0];
+    const vars = darkMode ? theme.dark : theme.light;
+    let styleEl = document.getElementById('quark-theme-vars');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'quark-theme-vars';
+        document.head.appendChild(styleEl);
+    }
+    const rootVars = Object.entries(vars).map(([k, v]) => k + ':' + v + ';').join('');
+    styleEl.textContent = ':root{' + rootVars + '} .dark-theme{' + rootVars + '}';
+}
+
+function openThemePicker() {
     const overlay = document.createElement('div');
     overlay.className = 'action-sheet-overlay';
     const sheet = document.createElement('div');
-    sheet.className = 'action-sheet';
+    sheet.className = 'action-sheet story-viewers-sheet';
 
     const title = document.createElement('div');
     title.className = 'story-viewers-title';
-    title.textContent = 'Цвет темы';
+    title.textContent = 'Тема оформления';
     sheet.appendChild(title);
 
-    const row = document.createElement('div');
-    row.className = 'theme-swatch-row';
-    ACCENT_THEMES.forEach(t => {
-        const sw = document.createElement('div');
-        sw.className = 'theme-swatch' + (accentTheme === t ? ' active' : '');
-        sw.style.background = ACCENT_COLORS[t];
-        sw.title = names[t];
-        if (accentTheme === t) sw.innerHTML = '<i class="fas fa-check"></i>';
-        sw.onclick = () => {
-            accentTheme = t;
-            localStorage.setItem('quark_accent', t);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:10px 16px 18px;';
+
+    PRESET_THEMES.forEach(t => {
+        const card = document.createElement('div');
+        const active = presetTheme === t.id;
+        card.style.cssText = 'border-radius:14px;overflow:hidden;cursor:pointer;border:3px solid ' + (active ? 'var(--primary)' : 'transparent') + ';transition:border-color 0.15s;';
+
+        const preview = document.createElement('div');
+        preview.style.cssText = 'height:64px;background:' + t.swatch + ';position:relative;';
+        if (active) {
+            const check = document.createElement('div');
+            check.style.cssText = 'position:absolute;top:6px;right:6px;background:white;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;color:var(--primary);font-size:11px;';
+            check.innerHTML = '<i class="fas fa-check"></i>';
+            preview.appendChild(check);
+        }
+
+        const label = document.createElement('div');
+        label.style.cssText = 'padding:6px 8px;font-size:12px;font-weight:600;color:var(--text);background:var(--surface);text-align:center;';
+        label.textContent = t.name;
+
+        card.appendChild(preview);
+        card.appendChild(label);
+        card.onclick = () => {
+            presetTheme = t.id;
+            localStorage.setItem('quark_preset', t.id);
+            applyPresetTheme();
             applyTheme();
             const av = $('#accentValue');
-            if (av) av.textContent = names[t];
+            if (av) av.textContent = t.name;
             overlay.remove();
         };
-        row.appendChild(sw);
+        grid.appendChild(card);
     });
-    sheet.appendChild(row);
 
+    sheet.appendChild(grid);
     overlay.appendChild(sheet);
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     document.body.appendChild(overlay);
@@ -5727,6 +5842,31 @@ function setupListeners() {
     $('#accentRow').onclick = openThemePicker;
     $('#wallpaperRow').onclick = openWallpaperPicker;
     $('#quickReactionRow').onclick = openQuickReactionPicker;
+
+    // Compact mode: tighter spacing between messages
+    const ct = $('#compactToggle');
+    if (ct) ct.classList.toggle('active', compactMode);
+    const compactFn = (e) => {
+        if (e) e.stopPropagation();
+        compactMode = !compactMode;
+        localStorage.setItem('quark_compact', compactMode ? '1' : '0');
+        document.body.classList.toggle('compact-mode', compactMode);
+        const t = $('#compactToggle'); if (t) t.classList.toggle('active', compactMode);
+    };
+    $('#compactRow').onclick = compactFn;
+    $('#compactToggle').onclick = compactFn;
+    if (compactMode) document.body.classList.add('compact-mode');
+
+    const vbt = $('#vibrationToggle');
+    if (vbt) vbt.classList.toggle('active', vibrationEnabled);
+    const vibFn = (e) => {
+        if (e) e.stopPropagation();
+        vibrationEnabled = !vibrationEnabled;
+        localStorage.setItem('quark_vibration', vibrationEnabled ? '1' : '0');
+        const t = $('#vibrationToggle'); if (t) t.classList.toggle('active', vibrationEnabled);
+    };
+    $('#vibrationRow').onclick = vibFn;
+    $('#vibrationToggle').onclick = vibFn;
 
     const scaleUpBtn = $('#scaleUpBtn');
     if (scaleUpBtn) scaleUpBtn.onclick = () => {

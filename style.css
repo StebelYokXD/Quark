@@ -3701,3 +3701,28 @@ body {
 .folder-chat-chip i {
     color: var(--primary);
 }
+
+/* ==================== COMPACT MODE ==================== */
+.compact-mode .msg-wrap {
+    margin-bottom: 0;
+}
+
+.compact-mode .msg-area {
+    gap: calc(1px * var(--ui-scale, 1));
+}
+
+.compact-mode .msg-bub {
+    padding: calc(6px * var(--ui-scale, 1)) calc(11px * var(--ui-scale, 1));
+    font-size: calc(13px * var(--ui-scale, 1));
+    border-radius: calc(14px * var(--ui-scale, 1));
+}
+
+.compact-mode .chat-item {
+    padding: calc(7px * var(--ui-scale, 1)) calc(12px * var(--ui-scale, 1));
+}
+
+.compact-mode .avatar {
+    width: calc(36px * var(--ui-scale, 1));
+    height: calc(36px * var(--ui-scale, 1));
+    font-size: calc(13px * var(--ui-scale, 1));
+}
