@@ -770,7 +770,15 @@ function buildMainUI() {
                     <div class="chat-header-name" id="msgName"></div>
                     <div class="chat-header-typing" id="msgTyping"></div>
                 </div>
+                <button class="icon-button" id="chatSearchBtn" title="Поиск"><i class="fas fa-search"></i></button>
                 <button class="icon-button" id="deleteSelectedBtn" style="display:none;color:var(--danger);"><i class="fas fa-trash"></i></button>
+            </div>
+            <div class="chat-search-bar hidden" id="chatSearchBar">
+                <button class="icon-button" id="chatSearchClose"><i class="fas fa-arrow-left"></i></button>
+                <input type="text" id="chatSearchInput" placeholder="Поиск в чате..." autocomplete="off">
+                <span class="chat-search-count" id="chatSearchCount"></span>
+                <button class="icon-button" id="chatSearchPrev" title="Назад (Shift+Enter)"><i class="fas fa-chevron-up"></i></button>
+                <button class="icon-button" id="chatSearchNext" title="Вперёд (Enter)"><i class="fas fa-chevron-down"></i></button>
             </div>
             <div class="pinned-bar hidden" id="pinnedBar">
                 <i class="fas fa-thumbtack pinned-bar-icon"></i>
@@ -2440,6 +2448,7 @@ function openChat(id) {
     unreadCounts[id] = 0;
     selectionMode = false;
     selectedMessages.clear();
+    toggleChatSearch(false);
 
     renderChatHeader(id);
 
@@ -2484,6 +2493,121 @@ function renderChatHeader(id) {
     const av = $('#msgAv');
     if (info) info.onclick = () => (isGroup ? showChatInfo(id) : viewUserProfile(id));
     if (av) av.onclick = () => (isGroup ? showChatInfo(id) : viewUserProfile(id));
+}
+
+// === In-chat message search ===============================================
+// Searches only the currently-loaded messageCache for the open chat — no
+// extra Firestore reads, instant results. Highlights matches inline with
+// <mark>, keeps a "current" pointer, and offers prev/next navigation that
+// scrolls the active hit into view. State lives on chatSearchState so it
+// survives text edits but resets cleanly when the bar closes or the chat
+// changes.
+let chatSearchState = { query: '', hits: [], index: -1 };
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function toggleChatSearch(force) {
+    const bar = $('#chatSearchBar');
+    if (!bar) return;
+    const open = force === undefined ? bar.classList.contains('hidden') : force;
+    if (open) {
+        bar.classList.remove('hidden');
+        const input = $('#chatSearchInput');
+        if (input) setTimeout(() => input.focus(), 50);
+    } else {
+        bar.classList.add('hidden');
+        clearChatSearchHighlights();
+        chatSearchState = { query: '', hits: [], index: -1 };
+        const input2 = $('#chatSearchInput');
+        if (input2) input2.value = '';
+        const count = $('#chatSearchCount');
+        if (count) count.textContent = '';
+    }
+}
+
+function clearChatSearchHighlights() {
+    const area = $('#msgArea');
+    if (!area) return;
+    area.querySelectorAll('mark.chat-search-hit').forEach(mk => {
+        const parent = mk.parentNode;
+        parent.replaceChild(document.createTextNode(mk.textContent), mk);
+        parent.normalize();
+    });
+}
+
+function runChatSearch(query) {
+    chatSearchState.query = (query || '').trim();
+    clearChatSearchHighlights();
+    const countEl = $('#chatSearchCount');
+    if (!chatSearchState.query) {
+        chatSearchState.hits = [];
+        chatSearchState.index = -1;
+        if (countEl) countEl.textContent = '';
+        return;
+    }
+    const cid = chatIdFor(currentChat);
+    const msgs = messageCache[cid] || [];
+    const lowerQ = chatSearchState.query.toLowerCase();
+    chatSearchState.hits = msgs.filter(m => m && typeof m.text === 'string' && m.text.toLowerCase().includes(lowerQ));
+    chatSearchState.index = chatSearchState.hits.length ? 0 : -1;
+    if (countEl) {
+        countEl.textContent = chatSearchState.hits.length ? (chatSearchState.index + 1) + '/' + chatSearchState.hits.length : '0';
+    }
+    highlightChatSearch();
+}
+
+function highlightChatSearch() {
+    if (!chatSearchState.hits.length) return;
+    const area = $('#msgArea');
+    if (!area) return;
+    const hits = chatSearchState.hits;
+    const currentId = hits[chatSearchState.index] && hits[chatSearchState.index].id;
+    hits.forEach(m => {
+        const node = area.querySelector('#msg-' + m.id);
+        if (!node) return;
+        const txtNodes = [];
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
+            acceptNode(n) {
+                if (!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        });
+        let cur; while ((cur = walker.nextNode())) txtNodes.push(cur);
+        const pattern = chatSearchState.query;
+        const lcPat = pattern.toLowerCase();
+        txtNodes.forEach(tn => {
+            const val = tn.nodeValue;
+            const lcVal = val.toLowerCase();
+            let i = lcVal.indexOf(lcPat);
+            if (i < 0) return;
+            const frag = document.createDocumentFragment();
+            let lastIdx = 0;
+            while (i >= 0) {
+                if (i > lastIdx) frag.appendChild(document.createTextNode(val.slice(lastIdx, i)));
+                const mk = document.createElement('mark');
+                mk.className = 'chat-search-hit' + (m.id === currentId ? ' current' : '');
+                mk.textContent = val.slice(i, i + pattern.length);
+                frag.appendChild(mk);
+                lastIdx = i + pattern.length;
+                i = lcVal.indexOf(lcPat, lastIdx);
+            }
+            if (lastIdx < val.length) frag.appendChild(document.createTextNode(val.slice(lastIdx)));
+            tn.parentNode.replaceChild(frag, tn);
+        });
+    });
+    const curEl = area.querySelector('mark.chat-search-hit.current');
+    if (curEl) curEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function chatSearchStep(delta) {
+    if (!chatSearchState.hits.length) return;
+    chatSearchState.index = (chatSearchState.index + delta + chatSearchState.hits.length) % chatSearchState.hits.length;
+    const countEl = $('#chatSearchCount');
+    if (countEl) countEl.textContent = (chatSearchState.index + 1) + '/' + chatSearchState.hits.length;
+    clearChatSearchHighlights();
+    highlightChatSearch();
 }
 
 // Hides the composer for channels where the current user can't post —
@@ -2608,6 +2732,9 @@ function renderFromCache(cid) {
     });
     area.scrollTop = 999999;
     renderedMsgIds[cid] = new Set(msgs.map(m => m.id));
+    if (chatSearchState.query && !$('#chatSearchBar').classList.contains('hidden')) {
+        runChatSearch(chatSearchState.query);
+    }
 }
 
 // ==================== SUBSCRIBE (foreground: the chat that's open) ====================
@@ -2906,30 +3033,35 @@ function listenForMessages() {
     if (unsubscribeMyMessages) unsubscribeMyMessages();
     if (unsubscribeGeneralMessages) unsubscribeGeneralMessages();
 
+    // Mark when live listening starts. Any message with a server timestamp
+    // at or before this instant is "history" being replayed to us on load
+    // (Firestore can deliver the initial cache in several chunks, not just
+    // one) and must NEVER trigger a sound or increment unread — otherwise a
+    // page refresh after being away for a while blasts one notification per
+    // historical message. Only genuinely new messages (timestamp newer than
+    // this) count as notifications.
+    const LISTEN_STARTED_AT = Date.now();
+
     // No orderBy on purpose: combined with the filter below it would need
     // a composite Firestore index this project doesn't have provisioned,
     // and the query would fail silently forever (this is what was quietly
     // breaking live preview updates and the unread counter). Order
     // doesn't matter here anyway — each newly-added doc is handled on its
     // own regardless of what order they arrive in.
-    let firstMine = true;
     unsubscribeMyMessages = db.collection('messages')
         .where('participants', 'array-contains', currentUser.uid)
         .onSnapshot(snap => {
-            if (firstMine) { firstMine = false; return; }
-            handleIncomingChanges(snap.docChanges());
+            handleIncomingChanges(snap.docChanges(), LISTEN_STARTED_AT);
         }, (err) => { console.error('listenForMessages (mine) error:', err); });
 
-    let firstGeneral = true;
     unsubscribeGeneralMessages = db.collection('messages')
         .where('chatId', '==', GENERAL_CHAT_ID)
         .onSnapshot(snap => {
-            if (firstGeneral) { firstGeneral = false; return; }
-            handleIncomingChanges(snap.docChanges());
+            handleIncomingChanges(snap.docChanges(), LISTEN_STARTED_AT);
         }, (err) => { console.error('listenForMessages (general) error:', err); });
 }
 
-function handleIncomingChanges(changes) {
+function handleIncomingChanges(changes, listenStartedAt) {
     let needsUpdate = false;
     changes.forEach(change => {
         // Only process adds — modifications (reactions, pins, reads) never
@@ -2942,6 +3074,14 @@ function handleIncomingChanges(changes) {
 
         const cid = msg.chatId;
         if (!cid) return;
+
+        // History replay guard: any message that already existed when we
+        // started listening is just being loaded from cache/server, not
+        // arriving live. It must never ring — only messages strictly newer
+        // than LISTEN_STARTED_AT count as notifications. Uses a small grace
+        // window (+2s) to absorb client/server clock drift, since server
+        // timestamps are authoritative and can lag the client by a second.
+        const isLive = toMillis(msg.timestamp) > listenStartedAt + 2000;
 
         const isFromMe = msg.userId === currentUser.uid;
 
@@ -2968,9 +3108,10 @@ function handleIncomingChanges(changes) {
             needsUpdate = true;
         }
 
-        // Increment unread only for messages from others, and only when
-        // not in that chat right now.
-        if (!isFromMe) {
+        // Increment unread only for live messages from others, and only
+        // when not in that chat right now. Stale messages replayed on load
+        // never count toward unread and never play a sound.
+        if (!isFromMe && isLive) {
             const curCid = currentChat ? chatIdFor(currentChat) : '';
             if (cid !== curCid) {
                 unreadCounts[id] = (unreadCounts[id] || 0) + 1;
@@ -5820,6 +5961,13 @@ function setupChatHeaderHeightSync() {
         });
         ro2.observe(pinnedBar);
     }
+    const searchBar = document.querySelector('#screenMessages > .chat-search-bar');
+    if (searchBar) {
+        const ro3 = new ResizeObserver(() => {
+            document.documentElement.style.setProperty('--chat-search-h', searchBar.offsetHeight + 'px');
+        });
+        ro3.observe(searchBar);
+    }
 }
 
 function setupListeners() {
@@ -5831,6 +5979,28 @@ function setupListeners() {
     setupStoriesHideOnScroll();
     setupScrollToBottomBtn();
     setupChatHeaderHeightSync();
+
+    const searchBtn = $('#chatSearchBtn');
+    if (searchBtn) searchBtn.onclick = () => toggleChatSearch();
+    const searchClose = $('#chatSearchClose');
+    if (searchClose) searchClose.onclick = () => toggleChatSearch(false);
+    const searchPrev = $('#chatSearchPrev');
+    if (searchPrev) searchPrev.onclick = () => chatSearchStep(-1);
+    const searchNext = $('#chatSearchNext');
+    if (searchNext) searchNext.onclick = () => chatSearchStep(1);
+    const chatSearchInp = $('#chatSearchInput');
+    if (chatSearchInp) {
+        chatSearchInp.addEventListener('input', e => runChatSearch(e.target.value));
+        chatSearchInp.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                chatSearchStep(e.shiftKey ? -1 : 1);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                toggleChatSearch(false);
+            }
+        });
+    }
 
     const pinnedBarClose = $('#pinnedBarClose');
     if (pinnedBarClose) {
