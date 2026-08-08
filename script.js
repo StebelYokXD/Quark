@@ -51,6 +51,7 @@ let selectedMessages = new Set();
 let selectionMode = false;
 let darkMode = localStorage.getItem('quark_dark') === '1';
 let quickReactionEmoji = localStorage.getItem('quark_quick_reaction') || '👍';
+let editingMsgId = null;
 let accentTheme = localStorage.getItem('quark_accent') || 'purple';
 let amoledMode = localStorage.getItem('quark_amoled') === '1';
 let chatWallpaper = localStorage.getItem('quark_wallpaper') || null;
@@ -2706,12 +2707,34 @@ function applyMessageChanges(changes, cid) {
         if (change.type === 'modified') {
             const prevData = idx > -1 ? msgs[idx] : null;
             if (idx > -1) msgs[idx] = data; else msgs.push(data);
-            // Sending a message fires 'added' (pending write) immediately
-            // followed by 'modified' (server-confirmed timestamp) — with
-            // nothing actually different on screen. Rebuilding the bubble
-            // for that is what caused the post-send blink, so only touch
-            // the DOM when something visible really changed.
-            if (area && (!prevData || !msgVisualsEqual(prevData, data))) {
+
+            if (area && prevData) {
+                const el = document.getElementById('msg-' + id);
+                if (el) {
+                    // Only readBy changed → just flip the tick colour/icon,
+                    // no bubble rebuild, no flash.
+                    const onlyReadChanged =
+                        prevData.text === data.text &&
+                        prevData.imageUrl === data.imageUrl &&
+                        JSON.stringify(prevData.reactions || {}) === JSON.stringify(data.reactions || {}) &&
+                        JSON.stringify(prevData.readBy || []) !== JSON.stringify(data.readBy || []);
+
+                    if (onlyReadChanged) {
+                        const tickEl = el.querySelector('.msg-ticks');
+                        if (tickEl) {
+                            const isRead = (data.readBy || []).length > 0;
+                            tickEl.className = 'msg-ticks' + (isRead ? ' read' : '');
+                            tickEl.innerHTML = isRead ? TICK_DOUBLE_SVG : TICK_SINGLE_SVG;
+                        }
+                    } else if (!msgVisualsEqual(prevData, data)) {
+                        const pos = msgs.findIndex(x => x.id === id);
+                        const nextMsg = msgs[pos + 1];
+                        const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
+                        const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
+                        el.replaceWith(fresh);
+                    }
+                }
+            } else if (area && !prevData && !msgVisualsEqual({}, data)) {
                 const pos = msgs.findIndex(x => x.id === id);
                 const nextMsg = msgs[pos + 1];
                 const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
@@ -2719,21 +2742,41 @@ function applyMessageChanges(changes, cid) {
                 const el = document.getElementById('msg-' + id);
                 if (el) el.replaceWith(fresh); else area.appendChild(fresh);
             }
+
             if (tailMsg && tailMsg.id === id) tailMsg = data;
             return;
         }
 
-        // added
+        // added — but id already exists: this is the server-timestamp
+        // confirmation of a message we added optimistically. Only update
+        // visuals if something real changed; for readBy-only, just flip the tick.
         if (idx > -1) {
             const prevData = msgs[idx];
             msgs[idx] = data;
-            if (area && !msgVisualsEqual(prevData, data)) {
-                const pos = msgs.findIndex(x => x.id === id);
-                const nextMsg = msgs[pos + 1];
-                const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
-                const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
+            if (area) {
                 const el = document.getElementById('msg-' + id);
-                if (el) el.replaceWith(fresh); else area.appendChild(fresh);
+                if (el) {
+                    const onlyReadChanged =
+                        prevData.text === data.text &&
+                        prevData.imageUrl === data.imageUrl &&
+                        JSON.stringify(prevData.reactions || {}) === JSON.stringify(data.reactions || {}) &&
+                        JSON.stringify(prevData.readBy || []) !== JSON.stringify(data.readBy || []);
+
+                    if (onlyReadChanged) {
+                        const tickEl = el.querySelector('.msg-ticks');
+                        if (tickEl) {
+                            const isRead = (data.readBy || []).length > 0;
+                            tickEl.className = 'msg-ticks' + (isRead ? ' read' : '');
+                            tickEl.innerHTML = isRead ? TICK_DOUBLE_SVG : TICK_SINGLE_SVG;
+                        }
+                    } else if (!msgVisualsEqual(prevData, data)) {
+                        const pos = msgs.findIndex(x => x.id === id);
+                        const nextMsg = msgs[pos + 1];
+                        const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
+                        const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
+                        el.replaceWith(fresh);
+                    }
+                }
             }
             if (tailMsg && tailMsg.id === id) tailMsg = data;
             return;
@@ -3225,12 +3268,18 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         const img = document.createElement('img');
         img.src = m.imageUrl;
         img.className = m.sticker ? 'msg-img msg-sticker-img' : 'msg-img';
-        img.onclick = function (e) {
-            e.stopPropagation();
-            const chatImgs = (messageCache[cid] || []).filter(x => x.imageUrl);
-            const idx = chatImgs.findIndex(x => x.id === m.id);
-            viewFull(m.imageUrl, chatImgs.map(x => x.imageUrl), idx);
-        };
+        if (m.sticker) {
+            // Stickers have no tap-to-view — they're decorative, not photos
+            img.style.cursor = 'default';
+        } else {
+            img.onclick = function (e) {
+                e.stopPropagation();
+                // Only include real photos (not stickers) in the gallery
+                const chatImgs = (messageCache[cid] || []).filter(x => x.imageUrl && !x.sticker);
+                const idx = chatImgs.findIndex(x => x.id === m.id);
+                viewFull(m.imageUrl, chatImgs.map(x => x.imageUrl), idx);
+            };
+        }
         bubble.appendChild(img);
     }
 
@@ -3361,20 +3410,34 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
     const canPin = canPinIn(currentChat);
     const isPinned = currentPinnedIds.has(msg.id);
 
-    // Full-screen dimmed overlay like Telegram — the bubble stays in its
-    // original position, we just dim everything around it and show the
-    // reaction bar + action list stacked below it.
+    // Use visualViewport so we know the true visible area above the keyboard.
+    const vvH = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+    const SAFE_MARGIN = 8;
+    const REACT_H = 54;    // reaction strip height
+    const ACTION_ITEM_H = 48;
+    const numActions = 2 + (isMine && msg.text && !msg.imageUrl && !msg.audioUrl ? 1 : 0) +
+        (msg.text ? 1 : 0) + (canPin ? 1 : 0) + (canDelete ? 1 : 0);
+    const ACTIONS_H = numActions * ACTION_ITEM_H + (canDelete ? 8 : 0); // +sep
+
     const overlay = document.createElement('div');
     overlay.className = 'msg-menu-overlay';
     overlay.addEventListener('pointerdown', e => e.preventDefault());
 
-    // Clone the bubble to show it in the overlay at its original position
+    // Clone bubble at its original screen position
     const wRect = wrapper.getBoundingClientRect();
     const clone = wrapper.cloneNode(true);
-    clone.style.cssText = 'position:fixed;top:' + wRect.top + 'px;left:' + wRect.left + 'px;width:' + wRect.width + 'px;pointer-events:none;z-index:2;';
+    clone.style.cssText = [
+        'position:fixed',
+        'top:' + wRect.top + 'px',
+        'left:' + wRect.left + 'px',
+        'width:' + wRect.width + 'px',
+        'pointer-events:none',
+        'z-index:2',
+        'margin:0'
+    ].join(';') + ';';
     overlay.appendChild(clone);
 
-    // Reaction strip
+    // Build reaction strip
     const reactStrip = document.createElement('div');
     reactStrip.className = 'msg-menu-react-strip';
     reactStrip.addEventListener('pointerdown', e => e.stopPropagation());
@@ -3382,15 +3445,11 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
         const btn = document.createElement('span');
         btn.className = 'msg-menu-react-btn';
         btn.textContent = emoji;
-        btn.onclick = (e) => {
-            e.stopPropagation();
-            toggleReaction(msg, emoji);
-            overlay.remove();
-        };
+        btn.onclick = (e) => { e.stopPropagation(); toggleReaction(msg, emoji); overlay.remove(); };
         reactStrip.appendChild(btn);
     });
 
-    // Actions list
+    // Build actions list
     const actionsList = document.createElement('div');
     actionsList.className = 'msg-menu-actions';
     actionsList.addEventListener('pointerdown', e => e.stopPropagation());
@@ -3407,90 +3466,64 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
         const senderName = isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (isMine ? 'Вы' : (allUsers[msg.userId]?.displayName || 'Пользователь'));
         setReply(msg.id, msg.text, senderName);
     }));
-
-    if (isMine && msg.text && !msg.imageUrl && !msg.audioUrl) {
+    if (isMine && msg.text && !msg.imageUrl && !msg.audioUrl)
         actionsList.appendChild(makeAction('fa-pen', 'Изменить', () => startEditMessage(msg, cid)));
-    }
-
-    if (msg.text) {
+    if (msg.text)
         actionsList.appendChild(makeAction('fa-copy', 'Копировать', () => navigator.clipboard.writeText(msg.text).catch(() => {})));
-    }
-
     actionsList.appendChild(makeAction('fa-share', 'Переслать', () => {
         openForwardPicker(msg, isChannel ? ((allChats[cid] && allChats[cid].name) || 'Канал') : (allUsers[msg.userId] ? allUsers[msg.userId].displayName : 'Пользователь'));
     }));
-
-    if (canPin) {
+    if (canPin)
         actionsList.appendChild(makeAction('fa-thumbtack', isPinned ? 'Открепить' : 'Закрепить', () => togglePinMessage(msg, cid)));
-    }
-
     if (canDelete) {
-        const sep = document.createElement('div');
-        sep.className = 'msg-menu-sep';
+        const sep = document.createElement('div'); sep.className = 'msg-menu-sep';
         actionsList.appendChild(sep);
         actionsList.appendChild(makeAction('fa-trash', 'Удалить', () => {
             showCustomConfirm('Удалить сообщение?', async () => {
                 await db.collection('messages').doc(msg.id).delete();
-                if (currentPinnedIds.has(msg.id)) {
+                if (currentPinnedIds.has(msg.id))
                     db.collection('chatMeta').doc(cid).set({ pinnedMessages: firebase.firestore.FieldValue.arrayRemove(msg.id) }, { merge: true }).catch(() => {});
-                }
                 const idx = messageCache[cid]?.findIndex(x => x.id === msg.id);
                 if (idx > -1) messageCache[cid].splice(idx, 1);
-                wrapper.style.opacity = '0'; wrapper.style.transform = 'scale(0.8)'; wrapper.style.transition = '0.2s';
+                wrapper.style.cssText += ';opacity:0;transform:scale(0.8);transition:0.2s;';
                 setTimeout(() => wrapper.remove(), 200);
             });
         }, true));
     }
 
-    // Position: reaction strip above bubble if there's room, else below.
-    // Actions list always below the bubble.
-    const REACT_H = 54, ACTIONS_H = Math.min(canDelete ? 7 : 5, 7) * 44;
-    const spaceBelow = window.innerHeight - wRect.bottom;
-    const spaceAbove = wRect.top;
+    // --- Lay out the three elements (reactions + bubble + actions) vertically ---
+    // Total stack height: REACT_H + wRect.height + ACTIONS_H + 2 gaps
+    const bubbleH = wRect.height;
+    const totalH = REACT_H + SAFE_MARGIN + bubbleH + SAFE_MARGIN + ACTIONS_H;
+    const hAlign = isMine ? 'right:' + SAFE_MARGIN + 'px;' : 'left:' + SAFE_MARGIN + 'px;';
 
-    let reactTop, actionsTop;
-    if (spaceAbove >= REACT_H + 8) {
-        reactTop = wRect.top - REACT_H - 8;
-    } else {
-        reactTop = wRect.bottom + 8;
+    // Try to center the bubble near where it originally was
+    let bubbleTop = wRect.top;
+    // Ensure entire stack fits in visible viewport
+    const stackTop = bubbleTop - REACT_H - SAFE_MARGIN;
+    const stackBottom = bubbleTop + bubbleH + SAFE_MARGIN + ACTIONS_H;
+    if (stackBottom > vvH - SAFE_MARGIN) {
+        // shift whole stack up
+        const overflow = stackBottom - (vvH - SAFE_MARGIN);
+        bubbleTop = Math.max(REACT_H + SAFE_MARGIN * 2, bubbleTop - overflow);
     }
-    actionsTop = Math.min(wRect.bottom + 8, window.innerHeight - ACTIONS_H - 16);
+    if (bubbleTop - REACT_H - SAFE_MARGIN < SAFE_MARGIN) {
+        bubbleTop = REACT_H + SAFE_MARGIN * 2;
+    }
 
-    reactStrip.style.cssText = 'position:fixed;top:' + reactTop + 'px;' + (isMine ? 'right:8px;' : 'left:8px;') + 'z-index:3;';
-    actionsList.style.cssText = 'position:fixed;top:' + actionsTop + 'px;' + (isMine ? 'right:8px;' : 'left:8px;') + 'z-index:3;';
+    const reactTop = bubbleTop - REACT_H - SAFE_MARGIN;
+    const actionsTop = bubbleTop + bubbleH + SAFE_MARGIN;
+
+    // Reposition the clone to the calculated bubbleTop
+    clone.style.top = bubbleTop + 'px';
+
+    reactStrip.style.cssText = 'position:fixed;top:' + reactTop + 'px;' + hAlign + 'z-index:3;max-width:calc(100vw - 16px);';
+    actionsList.style.cssText = 'position:fixed;top:' + actionsTop + 'px;' + hAlign + 'z-index:3;min-width:220px;max-width:calc(100vw - 16px);';
 
     overlay.appendChild(reactStrip);
     overlay.appendChild(actionsList);
     document.body.appendChild(overlay);
-
-    overlay.onclick = (e) => {
-        if (e.target === overlay) overlay.remove();
-    };
-}
-
-let editingMsgId = null;
-
-function startEditMessage(msg, cid) {
-    editingMsgId = msg.id;
-    const input = $('#msgInput');
-    const replyBar = $('#replyBar');
-    const replyPreview = $('#replyPreview');
-    if (!input || !replyBar || !replyPreview) return;
-    input.value = msg.text || '';
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 100) + 'px';
-    replyPreview.innerHTML = '<i class="fas fa-pen" style="color:var(--primary);margin-right:6px;"></i><strong>Изменить сообщение</strong>';
-    replyBar.classList.remove('hidden');
-    input.focus();
-    updateSendBtnMode();
-}
-
-function cancelEdit() {
-    editingMsgId = null;
-    const input = $('#msgInput');
-    if (input) { input.value = ''; input.style.height = 'auto'; }
-    cancelReply();
-    updateSendBtnMode();
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 }
 
 // ==================== TOGGLE REACTION ====================
@@ -4161,23 +4194,89 @@ function renderAdminPanel() {
 
     searchInput.oninput = doSearch;
 
-    // Ban / delete user
+    // Ban / unban user
     section('Управление пользователями');
     const banCard = card(
         '<div class="settings-row"><div class="settings-left" style="flex:1;">' +
-        '<input type="text" class="form-input" id="adminBanInput" placeholder="@username или email" style="width:100%;"></div></div>' +
+        '<input type="text" class="form-input" id="adminBanInput" placeholder="@username или имя" style="width:100%;"></div></div>' +
+        '<div id="adminBanResults" style="padding:0 16px 6px;"></div>' +
         '<div class="settings-row" id="adminBanBtn" style="cursor:pointer;">' +
         '<div class="settings-left"><div class="settings-icon" style="background:#EF444420;color:#EF4444;"><i class="fas fa-ban"></i></div>' +
-        '<span class="settings-text" style="color:#EF4444;">Заблокировать пользователя</span></div></div>'
+        '<span class="settings-text" style="color:#EF4444;">Заблокировать / разблокировать</span></div></div>'
     );
-    banCard.querySelector('#adminBanBtn').onclick = async () => {
-        const q = banCard.querySelector('#adminBanInput').value.trim().replace('@', '');
-        const found = Object.values(allUsers).find(u => (u.username || '').toLowerCase() === q.toLowerCase() || (u.email || '').toLowerCase() === q.toLowerCase());
+
+    const banResults = banCard.querySelector('#adminBanResults');
+    const banInput = banCard.querySelector('#adminBanInput');
+    banInput.oninput = () => {
+        const q = banInput.value.trim().replace('@', '').toLowerCase();
+        banResults.innerHTML = '';
+        if (!q) return;
+        const found = Object.values(allUsers).filter(u =>
+            (u.displayName || '').toLowerCase().includes(q) ||
+            (u.username || '').toLowerCase().includes(q)
+        ).slice(0, 5);
+        found.forEach(u => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--glass-border);';
+            const av = document.createElement('div');
+            av.className = 'avatar';
+            av.style.cssText = 'width:26px;height:26px;font-size:10px;flex-shrink:0;';
+            av.innerHTML = u.avatarUrl ? '<img src="' + u.avatarUrl + '">' : initials(u.displayName || '');
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1;min-width:0;font-size:12.5px;font-weight:600;';
+            info.textContent = u.displayName + (u.username ? ' @' + u.username : '') + (u.banned ? ' [БАН]' : '');
+            const btn = document.createElement('button');
+            btn.style.cssText = 'font-size:11px;padding:3px 10px;border-radius:12px;border:none;cursor:pointer;font-weight:600;flex-shrink:0;' +
+                (u.banned ? 'background:#10B981;color:white;' : 'background:#EF4444;color:white;');
+            btn.textContent = u.banned ? 'Разбан' : 'Бан';
+            btn.onclick = async () => {
+                const action = u.banned ? 'Разблокировать' : 'Заблокировать';
+                showCustomConfirm(action + ' ' + (u.displayName || u.username) + '?', async () => {
+                    try {
+                        await db.collection('users').doc(u.id).update({ banned: !u.banned });
+                        u.banned = !u.banned;
+                        btn.textContent = u.banned ? 'Разбан' : 'Бан';
+                        btn.style.background = u.banned ? '#10B981' : '#EF4444';
+                        info.textContent = u.displayName + (u.username ? ' @' + u.username : '') + (u.banned ? ' [БАН]' : '');
+                        showCustomAlert(u.banned ? 'Заблокирован' : 'Разблокирован');
+                    } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
+                });
+            };
+            row.appendChild(av);
+            row.appendChild(info);
+            row.appendChild(btn);
+            banResults.appendChild(row);
+        });
+        if (!found.length && q.length > 1) {
+            banResults.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:4px 0;">Не найдено</div>';
+        }
+    };
+    banCard.querySelector('#adminBanBtn').onclick = () => { banInput.focus(); };
+
+    // Delete user's messages
+    section('Очистка сообщений');
+    const delCard = card(
+        '<div class="settings-row"><div class="settings-left" style="flex:1;">' +
+        '<input type="text" class="form-input" id="adminDelInput" placeholder="@username или имя" style="width:100%;"></div></div>' +
+        '<div class="settings-row" id="adminDelBtn" style="cursor:pointer;">' +
+        '<div class="settings-left"><div class="settings-icon" style="background:#EF444420;color:#EF4444;"><i class="fas fa-trash"></i></div>' +
+        '<span class="settings-text" style="color:#EF4444;">Удалить все сообщения пользователя</span></div></div>'
+    );
+    delCard.querySelector('#adminDelBtn').onclick = async () => {
+        const q = delCard.querySelector('#adminDelInput').value.trim().replace('@', '').toLowerCase();
+        if (!q) return showCustomAlert('Введите имя или username');
+        const found = Object.values(allUsers).find(u =>
+            (u.displayName || '').toLowerCase() === q ||
+            (u.username || '').toLowerCase() === q
+        );
         if (!found) return showCustomAlert('Пользователь не найден');
-        showCustomConfirm('Заблокировать ' + (found.displayName || found.username) + '?', async () => {
+        showCustomConfirm('Удалить ВСЕ сообщения пользователя ' + (found.displayName || found.username) + '? Это нельзя отменить.', async () => {
             try {
-                await db.collection('users').doc(found.id || found.uid).update({ banned: true });
-                showCustomAlert('Заблокирован');
+                const snap = await db.collection('messages').where('userId', '==', found.id).get();
+                const batch = db.batch();
+                snap.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+                showCustomAlert('Удалено: ' + snap.size + ' сообщений');
             } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
         });
     };
@@ -4193,19 +4292,21 @@ function renderAdminPanel() {
     );
     bcCard.querySelector('#adminBcBtn').onclick = async () => {
         const text = bcCard.querySelector('#adminBcInput').value.trim();
-        if (!text) return;
-        try {
-            await db.collection('messages').add({
-                text: '📢 [Системное] ' + text,
-                userId: currentUser.uid,
-                chatId: GENERAL_CHAT_ID,
-                readBy: [],
-                reactions: {},
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            bcCard.querySelector('#adminBcInput').value = '';
-            showCustomAlert('Отправлено');
-        } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
+        if (!text) return showCustomAlert('Введите текст сообщения');
+        showCustomConfirm('Отправить системное сообщение всем?', async () => {
+            try {
+                await db.collection('messages').add({
+                    text: '[Системное] ' + text,
+                    userId: currentUser.uid,
+                    chatId: GENERAL_CHAT_ID,
+                    readBy: [],
+                    reactions: {},
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                bcCard.querySelector('#adminBcInput').value = '';
+                showCustomAlert('Отправлено');
+            } catch (e) { showCustomAlert('Ошибка: ' + e.message); }
+        });
     };
 }
 
