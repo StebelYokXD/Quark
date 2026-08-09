@@ -34,6 +34,13 @@ let activeChats = new Set();    // DM partner uids
 let myChatIds = new Set();      // group/channel ids I'm a member of
 let currentChat = null;         // either a uid (DM) or a chat id (group/channel/general)
 let messageCache = {};
+// Secondary index: for each cid, a Map from message id -> position in
+// messageCache[cid]. Lets message lookups/edits stay O(1) instead of the
+// O(n) findIndex they used to do — critical for large chats where a batch
+// of 'modified' changes (e.g. mass read receipts) would otherwise scan the
+// whole array once per change. Kept in sync inside the msgCache helper
+// functions below; never edit messageCache directly outside them.
+let messageIndex = {};
 // Which message ids have already been shown (at least once) in each chat's
 // current render pass — lets renderMessagesSnapshot tell a genuinely new
 // message apart from the rest of the chat re-rendering around it, so only
@@ -43,6 +50,68 @@ let lastMessagePreviews = {};
 let lastMessageTimes = {};
 let unreadCounts = {};
 let typingTimers = {};
+
+// ==================== messageCache helpers ====================
+// Centralised access to messageCache so the secondary id->pos index never
+// drifts. Anything mutating a chat's message array MUST go through these
+// (the existing findIndex call sites were swapped over to them).
+function getMsgs(cid) {
+    return messageCache[cid] || null;
+}
+function ensureMsgIndex(cid) {
+    if (!messageIndex[cid]) {
+        const m = new Map();
+        const arr = messageCache[cid];
+        if (arr) for (let i = 0; i < arr.length; i++) m.set(arr[i].id, i);
+        messageIndex[cid] = m;
+    }
+    return messageIndex[cid];
+}
+function findMsgPos(cid, id) {
+    const arr = messageCache[cid];
+    if (!arr) return -1;
+    const idx = ensureMsgIndex(cid).get(id);
+    return idx === undefined ? -1 : idx;
+}
+function findMsg(cid, id) {
+    const pos = findMsgPos(cid, id);
+    return pos > -1 ? messageCache[cid][pos] : null;
+}
+function setMsgs(cid, arr) {
+    messageCache[cid] = arr;
+    messageIndex[cid] = null;       // rebuilt lazily on next lookup
+}
+function upsertMsg(cid, data) {
+    const arr = messageCache[cid] || (messageCache[cid] = []);
+    const idx = ensureMsgIndex(cid).get(data.id);
+    if (idx === undefined) {
+        ensureMsgIndex(cid).set(data.id, arr.length);
+        arr.push(data);
+        return arr.length - 1;
+    }
+    arr[idx] = data;
+    return idx;
+}
+function removeMsgAt(cid, idx) {
+    const arr = messageCache[cid];
+    if (!arr || idx < 0 || idx >= arr.length) return;
+    const removed = arr[idx];
+    arr.splice(idx, 1);
+    // Rebuild slice positions after idx (splice shifted them by -1).
+    const m = ensureMsgIndex(cid);
+    m.delete(removed.id);
+    for (let i = idx; i < arr.length; i++) m.set(arr[i].id, i);
+}
+function clearMsgCache(cid) {
+    delete messageCache[cid];
+    delete messageIndex[cid];
+    delete renderedMsgIds[cid];
+}
+function clearAllMsgCache() {
+    messageCache = {};
+    messageIndex = {};
+    renderedMsgIds = {};
+}
 
 // ---- Folders (chat filters like Telegram) ----
 let folders = JSON.parse(localStorage.getItem('quark_folders') || '[]');
@@ -134,6 +203,29 @@ function formatTime(ts) {
 // message's DOM node on a 'modified' event that didn't change anything
 // visible (most commonly: our own just-sent message getting its pending
 // serverTimestamp() resolved a moment after the optimistic local write).
+// Shallow-compares two reactions maps ({emoji: [uid...]}) without
+// serialising — keys must match and the uid arrays must match in length
+// and contents (order-independent for safety).
+function reactionsEqual(a, b) {
+    const aKeys = Object.keys(a || {});
+    const bKeys = Object.keys(b || {});
+    if (aKeys.length !== bKeys.length) return false;
+    for (const k of aKeys) {
+        const av = a[k] || [];
+        const bv = b[k] || [];
+        if (av.length !== bv.length) return false;
+        for (let i = 0; i < av.length; i++) if (!bv.includes(av[i])) return false;
+    }
+    return true;
+}
+// Length-then-membership check for readBy arrays (order-independent).
+function uidListEqual(a, b) {
+    const aa = a || [], bb = b || [];
+    if (aa.length !== bb.length) return false;
+    for (let i = 0; i < aa.length; i++) if (!bb.includes(aa[i])) return false;
+    return true;
+}
+
 function msgVisualsEqual(a, b) {
     return a.text === b.text &&
         a.imageUrl === b.imageUrl &&
@@ -141,8 +233,8 @@ function msgVisualsEqual(a, b) {
         a.replyTo === b.replyTo &&
         (a.commentCount || 0) === (b.commentCount || 0) &&
         (a.viewedBy || []).length === (b.viewedBy || []).length &&
-        JSON.stringify(a.reactions || {}) === JSON.stringify(b.reactions || {}) &&
-        JSON.stringify(a.readBy || []) === JSON.stringify(b.readBy || []);
+        reactionsEqual(a.reactions, b.reactions) &&
+        uidListEqual(a.readBy, b.readBy);
 }
 
 function msgDateOf(msg) {
@@ -228,7 +320,23 @@ const MENTION_RE = /(^|[^\w@])@([a-zA-Z0-9_]{3,32})\b/g;
 // Builds message text as a DOM fragment (never innerHTML, to stay
 // injection-safe) with any @username that resolves to a known user or
 // chat/channel turned into a clickable mention span.
+// Memoised mention rendering: the same message text re-parses into an
+// identical DOM fragment every time a bubble is rebuilt (snapshot
+// re-renders, edits, reactions...). Cache parsed fragments keyed by
+// text. Cap guards against unbounded growth in pathological chats;
+// oldest entries are dropped in insertion order (Map preserves it).
+const MENTION_RENDER_CACHE = new Map();
+const MENTION_RENDER_CACHE_MAX = 2000;
+
 function renderTextWithMentions(text) {
+    const cached = MENTION_RENDER_CACHE.get(text);
+    if (cached) {
+        // Cloning is required because the cached fragment is a live node
+        // tree — the caller will append it (and possibly attach listeners
+        // to mention spans), so handing out the original would corrupt
+        // the cache on the second use.
+        return cached.cloneNode(true);
+    }
     const frag = document.createDocumentFragment();
     let lastIndex = 0;
     let match;
@@ -255,7 +363,11 @@ function renderTextWithMentions(text) {
         lastIndex = end;
     }
     if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)));
-    return frag;
+    if (MENTION_RENDER_CACHE.size >= MENTION_RENDER_CACHE_MAX) {
+        MENTION_RENDER_CACHE.delete(MENTION_RENDER_CACHE.keys().next().value);
+    }
+    MENTION_RENDER_CACHE.set(text, frag);
+    return frag.cloneNode(true);
 }
 
 // ==================== MENTION AUTOCOMPLETE ====================
@@ -590,9 +702,9 @@ function teardownSession() {
     activeChats = new Set();
     myChatIds = new Set();
     currentChat = null;
-    messageCache = {};
-    renderedMsgIds = {};
+    clearAllMsgCache();
     chatListRowSig = {};
+    chatListRowEls = {};
     lastMessageTimes = {};
     unreadCounts = {};
 }
@@ -734,7 +846,7 @@ function buildMainUI() {
     $('#mainContent').innerHTML = `
         <div class="screen active" id="screenChats">
             <div class="header">
-                <span style="font-weight:700;font-size:19px;color:var(--text);">Quark</span>
+                <span id="quarkLogo" style="font-weight:700;font-size:19px;color:var(--text);user-select:none;cursor:pointer;">Quark</span>
                 <div class="desktop-header-actions" id="desktopHeaderActions">
                     <button class="dt-nav-btn active" data-sc="screenChats" title="Чаты"><i class="fas fa-comment"></i></button>
                     <button class="dt-nav-btn" data-sc="screenProfile" title="Профиль"><i class="fas fa-user"></i></button>
@@ -929,7 +1041,7 @@ function buildMainUI() {
         </div>`;
 
     $('#bottomNav').innerHTML = `
-        <button class="nav-item active" data-sc="screenChats"><span class="nav-icon-wrap"><i class="fas fa-comments"></i><span class="nav-badge hidden" id="navChatsBadge"></span></span><span>Чаты</span></button>
+        <button class="nav-item active" id="navChatsBtn" data-sc="screenChats"><span class="nav-icon-wrap"><i class="fas fa-comments"></i><span class="nav-badge hidden" id="navChatsBadge"></span></span><span>Чаты</span></button>
         <button class="nav-item" data-sc="screenProfile"><i class="fas fa-user"></i><span>Профиль</span></button>
         <button class="nav-item" data-sc="screenSettings"><i class="fas fa-cog"></i><span>Настройки</span></button>`;
 
@@ -1247,7 +1359,7 @@ async function loadChatPreview(id, cid) {
         const snap = await db.collection('messages').where('chatId', '==', cid).orderBy('timestamp', 'asc').limit(50).get();
         const msgs = [];
         snap.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
-        messageCache[cid] = msgs;
+        setMsgs(cid, msgs);
         if (msgs.length > 0) {
             const last = msgs[msgs.length - 1];
             lastMessagePreviews[id] = last.sticker ? 'Стикер' : last.audioUrl ? 'Голосовое' : (last.imageUrl ? 'Фото' : (last.text || '').substring(0, 30));
@@ -1263,6 +1375,11 @@ async function loadChatPreview(id, cid) {
 // unrelated update (e.g. a reaction added in a different chat) doesn't
 // touch rows whose visible content hasn't actually changed.
 let chatListRowSig = {};
+// Live references to rendered chat-list rows keyed by chat id, so the
+// hot path in renderChatList doesn't have to run a querySelector for
+// every chat on every re-render (the list can re-render dozens of times
+// while typing/scrolling). Built lazily, pruned when a row is removed.
+let chatListRowEls = {};
 
 function buildChatRow(id, isGroup, meta) {
     const name = isGroup ? (meta.name || 'Чат') : (meta.displayName || 'Пользователь');
@@ -1344,11 +1461,15 @@ function renderChatList() {
         return (lastMessageTimes[b] || 0) - (lastMessageTimes[a] || 0);
     });
 
-    // Drop rows for chats that fell out of the list entirely.
-    Array.from(list.children).forEach(row => {
-        if (!sorted.includes(row.dataset.cid)) {
-            delete chatListRowSig[row.dataset.cid];
-            row.remove();
+    // Drop rows for chats that fell out of the list entirely. Uses the
+    // cached element map instead of walking list.children every time.
+    const sortedSet = new Set(sorted);
+    Object.keys(chatListRowEls).forEach(cid => {
+        if (!sortedSet.has(cid)) {
+            const row = chatListRowEls[cid];
+            if (row && row.parentNode === list) row.remove();
+            delete chatListRowEls[cid];
+            delete chatListRowSig[cid];
         }
     });
 
@@ -1357,13 +1478,16 @@ function renderChatList() {
         const isGroup = isGroupLike(id);
         const meta = isGroup ? allChats[id] : allUsers[id];
         const sig = chatRowSignature(id, isGroup, meta);
-        let row = list.querySelector(':scope > [data-cid="' + id + '"]');
-        if (!row) {
+        // O(1) map lookup instead of a querySelector per chat per re-render.
+        let row = chatListRowEls[id];
+        if (!row || row.parentNode !== list) {
             row = buildChatRow(id, isGroup, meta);
+            chatListRowEls[id] = row;
         } else if (chatListRowSig[id] !== sig) {
             const fresh = buildChatRow(id, isGroup, meta);
             row.replaceWith(fresh);
             row = fresh;
+            chatListRowEls[id] = row;
         }
         chatListRowSig[id] = sig;
         const wantedNext = prevEl ? prevEl.nextSibling : list.firstChild;
@@ -2773,9 +2897,9 @@ function subscribe(cid) {
 function patchSingleMessage(cid, id) {
     const area = (currentChat !== null && chatIdFor(currentChat) === cid) ? $('#msgArea') : null;
     if (!area) return;
-    const msgs = messageCache[cid] || [];
-    const pos = msgs.findIndex(x => x.id === id);
+    const pos = findMsgPos(cid, id);
     if (pos === -1) return;
+    const msgs = messageCache[cid];
 
     const chatMeta = allChats[currentChat];
     const isChannel = !!(chatMeta && chatMeta.type === 'channel');
@@ -2789,7 +2913,9 @@ function patchSingleMessage(cid, id) {
 }
 
 function applyMessageChanges(changes, cid) {
-    const msgs = messageCache[cid] || [];
+    // Make sure the cache array + index exist before we start mutating.
+    if (!messageCache[cid]) setMsgs(cid, []);
+    const msgs = messageCache[cid];
     const area = (currentChat !== null && chatIdFor(currentChat) === cid) ? $('#msgArea') : null;
 
     const chatMeta = allChats[currentChat];
@@ -2818,10 +2944,10 @@ function applyMessageChanges(changes, cid) {
     sortedChanges.forEach(change => {
         const id = change.doc.id;
         const data = { id, ...change.doc.data() };
-        const idx = msgs.findIndex(x => x.id === id);
+        const idx = findMsgPos(cid, id);
 
         if (change.type === 'removed') {
-            if (idx > -1) msgs.splice(idx, 1);
+            if (idx > -1) removeMsgAt(cid, idx);
             if (renderedMsgIds[cid]) renderedMsgIds[cid].delete(id);
             if (area) {
                 const el = document.getElementById('msg-' + id);
@@ -2833,18 +2959,21 @@ function applyMessageChanges(changes, cid) {
 
         if (change.type === 'modified') {
             const prevData = idx > -1 ? msgs[idx] : null;
-            if (idx > -1) msgs[idx] = data; else msgs.push(data);
+            if (idx > -1) msgs[idx] = data; else upsertMsg(cid, data);
 
             if (area && prevData) {
                 const el = document.getElementById('msg-' + id);
                 if (el) {
                     // Only readBy changed → just flip the tick colour/icon,
-                    // no bubble rebuild, no flash.
+                    // no bubble rebuild, no flash. Reactions compared with
+                    // reactionsEqual (no JSON.stringify) and readBy with
+                    // uidListEqual — both O(small), avoiding two full
+                    // serialisations per modified message.
                     const onlyReadChanged =
                         prevData.text === data.text &&
                         prevData.imageUrl === data.imageUrl &&
-                        JSON.stringify(prevData.reactions || {}) === JSON.stringify(data.reactions || {}) &&
-                        JSON.stringify(prevData.readBy || []) !== JSON.stringify(data.readBy || []);
+                        reactionsEqual(prevData.reactions, data.reactions) &&
+                        !uidListEqual(prevData.readBy, data.readBy);
 
                     if (onlyReadChanged) {
                         const tickEl = el.querySelector('.msg-ticks');
@@ -2854,7 +2983,7 @@ function applyMessageChanges(changes, cid) {
                             tickEl.innerHTML = isRead ? TICK_DOUBLE_SVG : TICK_SINGLE_SVG;
                         }
                     } else if (!msgVisualsEqual(prevData, data)) {
-                        const pos = msgs.findIndex(x => x.id === id);
+                        const pos = idx;
                         const nextMsg = msgs[pos + 1];
                         const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
                         const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
@@ -2862,7 +2991,7 @@ function applyMessageChanges(changes, cid) {
                     }
                 }
             } else if (area && !prevData && !msgVisualsEqual({}, data)) {
-                const pos = msgs.findIndex(x => x.id === id);
+                const pos = findMsgPos(cid, id);
                 const nextMsg = msgs[pos + 1];
                 const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
                 const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
@@ -2886,8 +3015,8 @@ function applyMessageChanges(changes, cid) {
                     const onlyReadChanged =
                         prevData.text === data.text &&
                         prevData.imageUrl === data.imageUrl &&
-                        JSON.stringify(prevData.reactions || {}) === JSON.stringify(data.reactions || {}) &&
-                        JSON.stringify(prevData.readBy || []) !== JSON.stringify(data.readBy || []);
+                        reactionsEqual(prevData.reactions, data.reactions) &&
+                        !uidListEqual(prevData.readBy, data.readBy);
 
                     if (onlyReadChanged) {
                         const tickEl = el.querySelector('.msg-ticks');
@@ -2897,7 +3026,7 @@ function applyMessageChanges(changes, cid) {
                             tickEl.innerHTML = isRead ? TICK_DOUBLE_SVG : TICK_SINGLE_SVG;
                         }
                     } else if (!msgVisualsEqual(prevData, data)) {
-                        const pos = msgs.findIndex(x => x.id === id);
+                        const pos = idx;
                         const nextMsg = msgs[pos + 1];
                         const showAvatar = !nextMsg || (isChannel ? false : nextMsg.userId !== data.userId);
                         const fresh = buildMsgWrapper(data, msgDateOf(data), cid, groupChat, showAvatar, isChannel, false);
@@ -2908,7 +3037,7 @@ function applyMessageChanges(changes, cid) {
             if (tailMsg && tailMsg.id === id) tailMsg = data;
             return;
         }
-        msgs.push(data);
+        upsertMsg(cid, data);
         hasNewMessage = true;
         if (data.userId === currentUser.uid) newMessageIsMine = true;
         if (!area) return;
@@ -2946,8 +3075,6 @@ function applyMessageChanges(changes, cid) {
         tailMsg = data;
     });
 
-    messageCache[cid] = msgs;
-
     if (area) {
         if (!msgs.length) {
             area.innerHTML = '<div class="empty-state"><i class="far fa-comments"></i><p>Нет сообщений</p></div>';
@@ -2972,7 +3099,7 @@ function applyMessageChanges(changes, cid) {
 function renderMessagesSnapshot(snap, cid) {
     const msgs = [];
     snap.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
-    messageCache[cid] = msgs;
+    setMsgs(cid, msgs);
 
     const area = $('#msgArea');
     if (!area) return;
@@ -3275,12 +3402,23 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     }
 
     // In group chats, label who sent each received message (skipped for
-    // DMs where it would be redundant, and for channels which show no
-    // identity on posts at all).
-    if (groupChat && !isMine && !isChannel) {
+    // DMs where it would be redundant). In channels, posts are authored
+    // "by the channel", but we still credit the actual admin who wrote
+    // each post — a small byline under the bubble — as long as we know
+    // who that is (their profile is in allUsers). If the author's profile
+    // isn't loaded (e.g. a post from a since-deleted account, or a user
+    // we simply don't have data for yet), no byline is shown rather than
+    // a placeholder.
+    const channelAuthor = isChannel ? allUsers[m.userId] : null;
+    if (groupChat && !isMine && (!isChannel || channelAuthor)) {
         const label = document.createElement('div');
-        label.className = 'sender-name-label';
-        label.textContent = allUsers[m.userId] ? (allUsers[m.userId].displayName || 'Пользователь') : 'Пользователь';
+        label.className = 'sender-name-label' + (isChannel ? ' sender-name-label-channel' : '');
+        label.textContent = isChannel
+            ? (channelAuthor.displayName || 'Пользователь')
+            : (allUsers[m.userId] ? (allUsers[m.userId].displayName || 'Пользователь') : 'Пользователь');
+        if (isChannel && channelAuthor.verified !== undefined) {
+            label.dataset.verified = channelAuthor.verified ? '1' : '0';
+        }
         bubble.appendChild(label);
     }
 
@@ -3318,7 +3456,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         const replyText = document.createElement('div');
         replyText.className = 'msg-reply-text';
 
-        const repliedMsg = messageCache[cid] ? messageCache[cid].find(x => x.id === m.replyTo) : null;
+        const repliedMsg = findMsg(cid, m.replyTo);
         if (repliedMsg) {
             const repliedUser = allUsers[repliedMsg.userId];
             replyName.textContent = repliedUser ? repliedUser.displayName : 'Пользователь';
@@ -3624,8 +3762,8 @@ function showMessageMenu(msg, wrapper, cid, isMine, isChannel) {
                 await db.collection('messages').doc(msg.id).delete();
                 if (currentPinnedIds.has(msg.id))
                     db.collection('chatMeta').doc(cid).set({ pinnedMessages: firebase.firestore.FieldValue.arrayRemove(msg.id) }, { merge: true }).catch(() => {});
-                const idx = messageCache[cid]?.findIndex(x => x.id === msg.id);
-                if (idx > -1) messageCache[cid].splice(idx, 1);
+                const idx = findMsgPos(cid, msg.id);
+                if (idx > -1) removeMsgAt(cid, idx);
                 wrapper.style.cssText += ';opacity:0;transform:scale(0.8);transition:0.2s;';
                 setTimeout(() => wrapper.remove(), 200);
             });
@@ -3683,7 +3821,7 @@ async function toggleReaction(msg, emoji) {
 
     const cid = chatIdFor(currentChat);
     if (messageCache[cid]) {
-        const msgInCache = messageCache[cid].find(m => m.id === msg.id);
+        const msgInCache = findMsg(cid, msg.id);
         if (msgInCache) msgInCache.reactions = reactions;
         patchSingleMessage(cid, msg.id);
     }
@@ -3849,7 +3987,7 @@ async function sendMsg() {
         try {
             await db.collection('messages').doc(msgId).update({ text, edited: true });
             const cid = chatIdFor(currentChat);
-            const cached = (messageCache[cid] || []).find(m => m.id === msgId);
+            const cached = findMsg(cid, msgId);
             if (cached) { cached.text = text; cached.edited = true; patchSingleMessage(cid, msgId); }
         } catch (e) { showSendErrorModal(e); }
         cancelEdit();
@@ -5076,7 +5214,7 @@ function renderPinnedBar() {
 
     const cid = chatIdFor(currentChat);
     const msgId = currentPinnedList[pinnedShownIndex];
-    const msg = (messageCache[cid] || []).find(x => x.id === msgId);
+    const msg = findMsg(cid, msgId);
     text.textContent = msg ? (msg.imageUrl ? 'Фото' : (msg.text || 'Сообщение')).substring(0, 60) : 'Закреплённое сообщение';
     bar.classList.remove('hidden');
 
@@ -5205,8 +5343,8 @@ async function deleteSelected() {
         const batch = db.batch();
         selectedMessages.forEach(id => {
             batch.delete(db.collection('messages').doc(id));
-            const idx = messageCache[cid]?.findIndex(x => x.id === id);
-            if (idx > -1) messageCache[cid].splice(idx, 1);
+            const idx = findMsgPos(cid, id);
+            if (idx > -1) removeMsgAt(cid, idx);
         });
         await batch.commit();
         selectedMessages.clear();
@@ -5970,6 +6108,87 @@ function setupChatHeaderHeightSync() {
     }
 }
 
+// ==================== EASTER EGG — tap the Quark logo repeatedly ====================
+// A silly discovery: tap the "Quark" word in the header 7 times quickly
+// and a red arrow fades in, pointing from the logo down to the "Чаты"
+// nav button, then fades out after a couple of seconds. No functional
+// purpose — just a wink. Resets the tap window after 800ms of inactivity
+// so accidental single taps never trigger it. The desktop screenChats
+// button (#desktopHeaderActions) is preferred on wide layouts; on phones
+// it falls back to #navChatsBtn in the bottom nav. If neither resolves
+// (e.g. before UI is fully mounted) the tap still counts but nothing is
+// shown, harmlessly.
+let quarkLogoTaps = 0;
+let quarkLogoTapTimer = null;
+function setupQuarkLogoEasterEgg() {
+    const logo = document.getElementById('quarkLogo');
+    if (!logo || logo.dataset.easterBound) return;
+    logo.dataset.easterBound = '1';
+    logo.addEventListener('click', () => {
+        quarkLogoTaps++;
+        clearTimeout(quarkLogoTapTimer);
+        quarkLogoTapTimer = setTimeout(() => { quarkLogoTaps = 0; }, 800);
+        if (quarkLogoTaps >= 7) {
+            quarkLogoTaps = 0;
+            showQuarkLogoArrow();
+        }
+    });
+}
+function showQuarkLogoArrow() {
+    const logo = document.getElementById('quarkLogo');
+    if (!logo) return;
+    // The easter egg explicitly points to the bottom "Чаты" tab. Keep the
+    // arrow visually obvious: a large standalone down-arrow, placed right
+    // above the target, reads better than a long curve across the app.
+    const mobileTarget = document.getElementById('navChatsBtn');
+    const desktopTarget = document.querySelector('#desktopHeaderActions .dt-nav-btn[data-sc="screenChats"]');
+    const isVisible = el => el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+    const target = isVisible(mobileTarget) ? mobileTarget : (isVisible(desktopTarget) ? desktopTarget : null);
+    if (!target) return;
+    if (document.getElementById('quarkEggArrow')) return;
+
+    const tr = target.getBoundingClientRect();
+    const size = 86;
+    const targetX = tr.left + tr.width / 2;
+    const targetY = tr.top + tr.height / 2;
+    // Put the arrow 82px toward the viewport centre from the button, then
+    // rotate its natural down-pointing shape directly at the button.
+    let inwardX = window.innerWidth / 2 - targetX;
+    let inwardY = window.innerHeight / 2 - targetY;
+    const inwardLen = Math.hypot(inwardX, inwardY) || 1;
+    inwardX /= inwardLen;
+    inwardY /= inwardLen;
+    const arrowX = targetX + inwardX * 82;
+    const arrowY = targetY + inwardY * 82;
+    const left = arrowX - size / 2;
+    const top = arrowY - size / 2;
+    const pointAngle = Math.atan2(targetY - arrowY, targetX - arrowX) * 180 / Math.PI - 90;
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.id = 'quarkEggArrow';
+    svg.setAttribute('viewBox', '0 0 100 100');
+    svg.style.cssText =
+        'position:fixed;left:' + left + 'px;top:' + top + 'px;width:' + size + 'px;height:' + size + 'px;' +
+        'pointer-events:none;z-index:600;opacity:0;transform:rotate(' + pointAngle + 'deg) scale(.92);' +
+        'transition:opacity .35s ease, transform .35s cubic-bezier(.2,1.25,.35,1);' +
+        'filter:drop-shadow(0 0 9px rgba(239,68,68,.65));';
+    svg.innerHTML =
+        '<path d="M50 10 C50 10 50 44 50 61" fill="none" stroke="#ef4444" stroke-width="13" stroke-linecap="round"></path>' +
+        '<path d="M24 52 L50 84 L76 52 Z" fill="#ef4444"></path>' +
+        '<path d="M50 10 C50 10 50 44 50 61" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="4" stroke-linecap="round"></path>';
+
+    document.body.appendChild(svg);
+    requestAnimationFrame(() => {
+        svg.style.opacity = '1';
+        svg.style.transform = 'rotate(' + pointAngle + 'deg) scale(1)';
+    });
+    setTimeout(() => {
+        svg.style.opacity = '0';
+        svg.style.transform = 'rotate(' + pointAngle + 'deg) scale(.96)';
+        setTimeout(() => svg.remove(), 500);
+    }, 2200);
+}
+
 function setupListeners() {
     $$('.nav-item, .dt-nav-btn').forEach(n => n.onclick = () => showScreen(n.dataset.sc));
     $('#backBtn').onclick = () => showScreen('screenChats');
@@ -5979,6 +6198,7 @@ function setupListeners() {
     setupStoriesHideOnScroll();
     setupScrollToBottomBtn();
     setupChatHeaderHeightSync();
+    setupQuarkLogoEasterEgg();
 
     const searchBtn = $('#chatSearchBtn');
     if (searchBtn) searchBtn.onclick = () => toggleChatSearch();
@@ -6009,7 +6229,7 @@ function setupListeners() {
             if (!currentChat || !currentPinnedList.length) return;
             const cid = chatIdFor(currentChat);
             const msgId = currentPinnedList[pinnedShownIndex];
-            const msg = (messageCache[cid] || []).find(x => x.id === msgId) || { id: msgId };
+            const msg = findMsg(cid, msgId) || { id: msgId };
             togglePinMessage(msg, cid);
         };
     }
@@ -6251,7 +6471,7 @@ function setupListeners() {
 
     $('#clearCacheRow').onclick = () => {
         showCustomConfirm('Очистить локальный кэш сообщений? Приложение перезагрузится.', () => {
-            messageCache = {};
+            clearAllMsgCache();
             location.reload();
         });
     };

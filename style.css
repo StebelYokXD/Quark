@@ -1595,6 +1595,18 @@ mark.chat-search-hit.current {
     margin-bottom: calc(2px * var(--ui-scale, 1));
 }
 
+/* Channel post byline: credits the admin who actually wrote the post.
+   Subtler than the group sender label — a quiet secondary line above
+   the bubble, since the channel identity itself already "owns" the
+   post visually (avatar/name in the header). */
+.sender-name-label-channel {
+    font-size: calc(11px * var(--ui-scale, 1));
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: calc(2px * var(--ui-scale, 1));
+    opacity: 0.85;
+}
+
 /* Action sheet (create group/channel picker) */
 .action-sheet-overlay {
     position: fixed;
