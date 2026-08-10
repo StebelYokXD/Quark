@@ -227,6 +227,9 @@ function uidListEqual(a, b) {
 }
 
 function msgVisualsEqual(a, b) {
+    // Poll votes live inside the message payload. Any update to a poll must
+    // rebuild its card, so do not let the generic visual fast-path hide it.
+    if (a.poll || b.poll) return false;
     return a.text === b.text &&
         a.imageUrl === b.imageUrl &&
         a.fileName === b.fileName &&
@@ -1049,7 +1052,8 @@ function buildMainUI() {
     menu.className = 'attach-menu';
     menu.id = 'attachMenu';
     menu.innerHTML = '<button class="attach-menu-item" data-accept="image/*"><i class="fas fa-image" style="color:#10B981;"></i> Фото</button>' +
-        '<button class="attach-menu-item" id="attachStickerBtn"><i class="fas fa-icons" style="color:#F59E0B;"></i> Стикер</button>';
+        '<button class="attach-menu-item" id="attachStickerBtn"><i class="fas fa-icons" style="color:#F59E0B;"></i> Стикер</button>' +
+        '<button class="attach-menu-item" id="attachPollBtn"><i class="fas fa-square-poll-vertical" style="color:#7C4DFF;"></i> Опрос</button>';
     document.body.appendChild(menu);
 
     renderOwnProfile();
@@ -2970,6 +2974,7 @@ function applyMessageChanges(changes, cid) {
                     // uidListEqual — both O(small), avoiding two full
                     // serialisations per modified message.
                     const onlyReadChanged =
+                        !prevData.poll && !data.poll &&
                         prevData.text === data.text &&
                         prevData.imageUrl === data.imageUrl &&
                         reactionsEqual(prevData.reactions, data.reactions) &&
@@ -3013,6 +3018,7 @@ function applyMessageChanges(changes, cid) {
                 const el = document.getElementById('msg-' + id);
                 if (el) {
                     const onlyReadChanged =
+                        !prevData.poll && !data.poll &&
                         prevData.text === data.text &&
                         prevData.imageUrl === data.imageUrl &&
                         reactionsEqual(prevData.reactions, data.reactions) &&
@@ -3259,7 +3265,10 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     // Channel posts are authored "by the channel", not by whichever admin
     // hit send — so even the admin who posted it sees it as an incoming
     // message from the channel, exactly like every other subscriber does.
-    const isMine = isChannel ? false : (m.userId === currentUser.uid);
+    // Polls are shared chat cards, not a conventional outgoing bubble.
+    // Keep them on the received/left side for everyone, including their
+    // creator, so the wide option buttons have room and stay consistent.
+    const isMine = (isChannel || m.poll) ? false : (m.userId === currentUser.uid);
     const wrapper = document.createElement('div');
     // The whole chat gets fully re-rendered on every snapshot (simplest way
     // to stay in sync), so the appear animation must be opt-in per bubble —
@@ -3286,7 +3295,9 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     // blurs whatever's focused (the compose input) before the click even
     // fires, closing the keyboard just to react to something.
     wrapper.addEventListener('pointerdown', function (e) {
-        if (!selectionMode) e.preventDefault();
+        // A reaction row is a horizontally-scrollable control. Preventing
+        // its pointerdown here cancels native touch scrolling and mouse drag.
+        if (!selectionMode && !e.target.closest('.msg-reactions-row')) e.preventDefault();
     });
     // Double-tap = instant quick reaction (like Telegram), single tap
     // opens the menu — debounced so the first tap of a double-tap doesn't
@@ -3320,6 +3331,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         let touchStartX = 0, touchStartY = 0, dragging = false, currentDx = 0, replyIcon = null;
 
         wrapper.addEventListener('touchstart', function (e) {
+            if (e.target.closest('.msg-reactions-row')) return;
             if (selectionMode || e.touches.length !== 1) return;
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
@@ -3327,6 +3339,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         }, { passive: true });
 
         wrapper.addEventListener('touchmove', function (e) {
+            if (e.target.closest('.msg-reactions-row')) return;
             if (selectionMode || e.touches.length !== 1) return;
             const dx = e.touches[0].clientX - touchStartX;
             const dy = e.touches[0].clientY - touchStartY;
@@ -3602,6 +3615,36 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
         return timeSpan;
     }
 
+    if (m.poll) {
+        const poll = m.poll;
+        const votes = poll.votes || {};
+        const total = Object.keys(votes).length;
+        const myVote = Object.prototype.hasOwnProperty.call(votes, currentUser.uid) ? Number(votes[currentUser.uid]) : -1;
+        const card = document.createElement('div');
+        card.className = 'poll-card';
+        const title = document.createElement('div');
+        title.className = 'poll-question';
+        title.textContent = poll.question || 'Опрос';
+        card.appendChild(title);
+        (poll.options || []).forEach((option, index) => {
+            const count = Object.values(votes).filter(v => Number(v) === index).length;
+            const percent = total ? Math.round(count * 100 / total) : 0;
+            const optionBtn = document.createElement('button');
+            optionBtn.className = 'poll-option' + (myVote === index ? ' voted' : '') + (myVote > -1 ? ' poll-finished' : '');
+            optionBtn.disabled = myVote > -1;
+            optionBtn.innerHTML = '<span class="poll-option-fill" style="width:' + percent + '%"></span>' +
+                '<span class="poll-option-text"></span><span class="poll-option-percent">' + (myVote > -1 ? percent + '%' : '') + '</span>';
+            optionBtn.querySelector('.poll-option-text').textContent = option;
+            optionBtn.onclick = e => { e.stopPropagation(); voteInPoll(m, index); };
+            card.appendChild(optionBtn);
+        });
+        const meta = document.createElement('div');
+        meta.className = 'poll-meta';
+        meta.textContent = total + ' ' + (total === 1 ? 'голос' : (total >= 2 && total <= 4 ? 'голоса' : 'голосов'));
+        card.appendChild(meta);
+        bubble.appendChild(card);
+    }
+
     if (m.text) {
         const row = document.createElement('div');
         row.style.display = 'flex';
@@ -3629,7 +3672,15 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
 
     if (m.reactions && Object.keys(m.reactions).length > 0) {
         const reactionRow = document.createElement('div');
-        reactionRow.style.cssText = 'display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;max-width:180px;';
+        reactionRow.className = 'msg-reactions-row';
+        // Makes a normal mouse wheel scroll the reaction strip horizontally
+        // without requiring Shift; vertical page scrolling still works away
+        // from the strip.
+        reactionRow.addEventListener('wheel', e => {
+            if (!reactionRow.scrollWidth || reactionRow.scrollWidth <= reactionRow.clientWidth) return;
+            e.preventDefault();
+            reactionRow.scrollLeft += e.deltaY || e.deltaX;
+        }, { passive: false });
         for (const [emoji, users] of Object.entries(m.reactions)) {
             if (!users || !users.length) continue;
             const chip = document.createElement('span');
@@ -6189,8 +6240,88 @@ function showQuarkLogoArrow() {
     }, 2200);
 }
 
+// ==================== POLLS ====================
+function openPollComposer() {
+    if (!currentChat) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'poll-composer-overlay';
+    overlay.innerHTML =
+        '<div class="poll-composer">' +
+        '<div class="poll-composer-title">Создать опрос</div>' +
+        '<input class="poll-composer-input" id="pollQuestionInput" maxlength="180" placeholder="Вопрос">' +
+        '<div id="pollOptions">' +
+        '<input class="poll-composer-input poll-option-input" maxlength="100" placeholder="Вариант 1">' +
+        '<input class="poll-composer-input poll-option-input" maxlength="100" placeholder="Вариант 2">' +
+        '</div>' +
+        '<button class="poll-add-option" id="pollAddOption"><i class="fas fa-plus"></i> Добавить вариант</button>' +
+        '<div class="poll-composer-actions"><button class="btn btn-secondary" id="pollCancel">Отмена</button><button class="btn btn-primary" id="pollSend">Создать</button></div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+    const question = overlay.querySelector('#pollQuestionInput');
+    question.focus();
+    overlay.querySelector('#pollCancel').onclick = () => overlay.remove();
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    overlay.querySelector('#pollAddOption').onclick = () => {
+        const options = overlay.querySelectorAll('.poll-option-input');
+        if (options.length >= 10) return;
+        const input = document.createElement('input');
+        input.className = 'poll-composer-input poll-option-input';
+        input.maxLength = 100;
+        input.placeholder = 'Вариант ' + (options.length + 1);
+        overlay.querySelector('#pollOptions').appendChild(input);
+        input.focus();
+        if (options.length + 1 >= 10) overlay.querySelector('#pollAddOption').disabled = true;
+    };
+    overlay.querySelector('#pollSend').onclick = async () => {
+        const title = question.value.trim();
+        const options = Array.from(overlay.querySelectorAll('.poll-option-input')).map(i => i.value.trim()).filter(Boolean);
+        if (!title) return showCustomAlert('Введите вопрос для опроса.');
+        if (options.length < 2) return showCustomAlert('Добавьте хотя бы два варианта ответа.');
+        const cid = chatIdFor(currentChat);
+        const meta = allChats[currentChat];
+        const participants = isGroupLike(currentChat) ? (meta?.members || []) : [currentUser.uid, currentChat];
+        const poll = { question: title, options, votes: {}, createdBy: currentUser.uid };
+        try {
+            await db.collection('messages').add({
+                text: '', poll, userId: currentUser.uid, chatId: cid, participants,
+                readBy: [], reactions: {}, timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            overlay.remove();
+        } catch (e) { console.error('Poll send error:', e); showCustomAlert('Не удалось создать опрос.'); }
+    };
+}
+
+async function voteInPoll(msg, optionIndex) {
+    if (!msg.poll || !currentUser) return;
+    if (Object.prototype.hasOwnProperty.call(msg.poll.votes || {}, currentUser.uid)) return;
+    try {
+        await db.runTransaction(async tx => {
+            const ref = db.collection('messages').doc(msg.id);
+            const snap = await tx.get(ref);
+            if (!snap.exists) return;
+            const data = snap.data();
+            const poll = data.poll;
+            if (!poll || Object.prototype.hasOwnProperty.call(poll.votes || {}, currentUser.uid)) return;
+            poll.votes = { ...(poll.votes || {}), [currentUser.uid]: optionIndex };
+            tx.update(ref, { poll });
+        });
+    } catch (e) { console.error('Poll vote error:', e); showCustomAlert('Не удалось сохранить голос.'); }
+}
+
 function setupListeners() {
     $$('.nav-item, .dt-nav-btn').forEach(n => n.onclick = () => showScreen(n.dataset.sc));
+    // Handle this in capture phase so the message bubble's own gesture
+    // handlers can never swallow a mouse wheel before it reaches the
+    // reaction strip. A regular wheel scrolls reaction chips horizontally.
+    if (!document.documentElement.dataset.reactionWheelBound) {
+        document.documentElement.dataset.reactionWheelBound = '1';
+        document.addEventListener('wheel', e => {
+            const row = e.target.closest && e.target.closest('.msg-reactions-row');
+            if (!row || row.scrollWidth <= row.clientWidth) return;
+            e.preventDefault();
+            row.scrollLeft += e.deltaY || e.deltaX;
+        }, { capture: true, passive: false });
+    }
     $('#backBtn').onclick = () => showScreen('screenChats');
     $('#cancelSelectBtn').onclick = () => toggleSelect();
     $('#deleteSelectedBtn').onclick = deleteSelected;
@@ -6292,6 +6423,15 @@ function setupListeners() {
             e.stopPropagation();
             $('#attachMenu').classList.remove('show');
             openStickerPicker();
+        };
+    }
+
+    const pollBtn = $('#attachPollBtn');
+    if (pollBtn) {
+        pollBtn.onclick = function (e) {
+            e.stopPropagation();
+            $('#attachMenu').classList.remove('show');
+            openPollComposer();
         };
     }
 

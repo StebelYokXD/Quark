@@ -747,7 +747,23 @@ mark.chat-search-hit.current {
 }
 
 /* Reactions */
+.msg-reactions-row {
+    display: flex;
+    gap: 4px;
+    width: min(300px, 100%);
+    max-width: min(100%, 300px);
+    margin-top: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+}
+.msg-reactions-row::-webkit-scrollbar { display: none; }
 .msg-reaction-chip {
+    flex: 0 0 auto;
+    white-space: nowrap;
     background: var(--surface);
     border: 1px solid var(--glass-border);
     border-radius: calc(13px * var(--ui-scale, 1));
@@ -1606,6 +1622,34 @@ mark.chat-search-hit.current {
     margin-bottom: calc(2px * var(--ui-scale, 1));
     opacity: 0.85;
 }
+
+/* Poll creation and message card */
+.poll-composer-overlay {
+    position: fixed; inset: 0; z-index: 500;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: rgba(0,0,0,.55);
+}
+.poll-composer {
+    width: min(420px, 100%); max-height: 85vh; overflow-y: auto;
+    padding: 20px; border-radius: 18px; background: var(--surface);
+    border: 1px solid var(--border); box-shadow: var(--shadow-lg);
+}
+.poll-composer-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+.poll-composer-input { width: 100%; box-sizing: border-box; margin-bottom: 9px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); outline: none; }
+.poll-composer-input:focus { border-color: var(--primary); }
+.poll-add-option { border: 0; padding: 7px 0; background: none; color: var(--primary); font: inherit; cursor: pointer; }
+.poll-composer-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
+.poll-card { min-width: min(250px, 62vw); padding: 3px 0 1px; }
+.poll-question { margin: 2px 0 10px; font-size: 15px; font-weight: 700; line-height: 1.3; }
+.poll-option { position: relative; display: flex; align-items: center; width: 100%; min-height: 38px; margin: 6px 0; padding: 8px 10px; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.poll-option:disabled { cursor: default; }
+.poll-option-fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--primary) 22%, transparent); border-radius: inherit; transition: width .35s ease; }
+.poll-option.voted { border-color: var(--primary); }
+.poll-option.voted .poll-option-fill { background: color-mix(in srgb, var(--primary) 38%, transparent); }
+.poll-option-text, .poll-option-percent { position: relative; z-index: 1; }
+.poll-option-text { flex: 1; }
+.poll-option-percent { margin-left: 10px; font-size: 12px; font-weight: 700; color: var(--text-muted); }
+.poll-meta { margin-top: 9px; color: var(--text-muted); font-size: 12px; }
 
 /* Action sheet (create group/channel picker) */
 .action-sheet-overlay {
