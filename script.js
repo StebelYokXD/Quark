@@ -2626,7 +2626,7 @@ function renderChatHeader(id) {
 	const inputCha = document.getElementById("inputContainer");
 	
 	if(headerChat) headerChat.style.display = 'flex';
-	if(inputCha) inputCha.style.display = 'block';
+	if(inputCha) inputCha.style.display = '';
 }
 
 // === In-chat message search ===============================================
