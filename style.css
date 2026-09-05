@@ -968,14 +968,13 @@ mark.chat-search-hit.current {
     text-decoration: underline;
 }
 
-/* Input */
 .input-container {
-    flex-shrink: 0;
-    position: relative;
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
     background: var(--glass);
     backdrop-filter: blur(26px) saturate(1.4);
     -webkit-backdrop-filter: blur(26px) saturate(1.4);
-    box-shadow: 0 -1px 0 var(--glass-border);
 }
 
 .mention-suggestions {
