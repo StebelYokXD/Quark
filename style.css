@@ -42,6 +42,7 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+	transition: 0.2s all !important;
 }
 
 html {
@@ -56,7 +57,7 @@ body {
     width: 100%;
     overflow: hidden;
     overscroll-behavior: none;
-    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    font-family: "Font", sans-serif;
     background: var(--bg);
     color: var(--text);
     display: flex;
@@ -1072,12 +1073,16 @@ mark.chat-search-hit.current {
     font-size: calc(14px * var(--ui-scale, 1));
     font-family: inherit;
     outline: none;
+	overflow: none;
     resize: none;
     max-height: calc(100px * var(--ui-scale, 1));
     color: var(--text);
     transition: box-shadow 0.15s ease;
 }
-
+@font-face {
+   font-family: 'Font';
+   src: url("QuarkF2.otf") format('truetype');
+}
 .msg-input:focus {
     box-shadow: 0 0 0 3px var(--primary-glow);
 }
@@ -3004,7 +3009,7 @@ mark.chat-search-hit.current {
 }
 
 .desktop-scale-control {
-    display: flex;
+    display: none;
     align-items: center;
     gap: calc(4px * var(--ui-scale, 1));
     margin-left: calc(4px * var(--ui-scale, 1));

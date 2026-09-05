@@ -851,7 +851,7 @@ function buildMainUI() {
             <div class="header">
                 <span id="quarkLogo" style="font-weight:700;font-size:19px;color:var(--text);user-select:none;cursor:pointer;">Quark</span>
                 <div class="desktop-header-actions" id="desktopHeaderActions">
-                    <button class="dt-nav-btn active" data-sc="screenChats" title="Чаты"><i class="fas fa-comment"></i></button>
+                    <button class="dt-nav-btn active" style="display: none;" data-sc="screenChats" title="Чаты"><i class="fas fa-comment"></i></button>
                     <button class="dt-nav-btn" data-sc="screenProfile" title="Профиль"><i class="fas fa-user"></i></button>
                     <button class="dt-nav-btn" data-sc="screenSettings" title="Настройки"><i class="fas fa-cog"></i></button>
                     <div class="desktop-scale-control" id="desktopScaleControl" title="Масштаб интерфейса">
@@ -877,7 +877,7 @@ function buildMainUI() {
             <button class="fab-new-chat" id="newChatBtn"><i class="fas fa-plus"></i></button>
         </div>
         <div class="screen" id="screenMessages">
-            <div class="header">
+            <div class="header" id="headChat" style="display: none;">
                 <button class="icon-button" id="backBtn"><i class="fas fa-arrow-left"></i></button>
                 <button class="icon-button" id="cancelSelectBtn" style="display:none;"><i class="fas fa-times"></i></button>
                 <div class="avatar chat-header-avatar" id="msgAv"></div>
@@ -902,7 +902,7 @@ function buildMainUI() {
             </div>
             <div class="msg-area" id="msgArea"><div class="empty-state"><i class="far fa-comments"></i><p>Выберите чат</p></div></div>
             <button class="scroll-bottom-btn" id="scrollBottomBtn"><i class="fas fa-chevron-down"></i></button>
-            <div class="input-container" id="inputContainer">
+            <div class="input-container" style="display: none;" id="inputContainer">
                 <div class="mention-suggestions hidden" id="mentionSuggestions"></div>
                 <div class="reply-bar hidden" id="replyBar"><div class="reply-preview" id="replyPreview"></div><span class="reply-close" id="replyClose">✕</span></div>
                 <div class="input-row" id="inputRow">
@@ -1519,10 +1519,10 @@ function updateNavBadge() {
 
 // ==================== FOLDERS ====================
 const BUILT_IN_FOLDERS = [
-    { id: 'all',      name: 'Все',      icon: 'fas fa-comments' },
+    { id: 'all',      name: 'Все',      icon: 'fas fa-message' },
     { id: 'dms',      name: 'Личные',   icon: 'fas fa-user' },
     { id: 'groups',   name: 'Группы',   icon: 'fas fa-users' },
-    { id: 'channels', name: 'Каналы',   icon: 'fas fa-broadcast-tower' },
+    { id: 'channels', name: 'Каналы',   icon: 'fas fa-bullhorn' },
 ];
 
 function renderFolderTabs() {
@@ -2621,6 +2621,12 @@ function renderChatHeader(id) {
     const av = $('#msgAv');
     if (info) info.onclick = () => (isGroup ? showChatInfo(id) : viewUserProfile(id));
     if (av) av.onclick = () => (isGroup ? showChatInfo(id) : viewUserProfile(id));
+	
+	const headerChat = document.getElementById("headChat");
+	const inputCha = document.getElementById("inputContainer");
+	
+	if(headerChat) headerChat.style.display = 'flex';
+	if(inputCha) inputCha.style.display = 'block';
 }
 
 // === In-chat message search ===============================================
@@ -3268,7 +3274,7 @@ function buildMsgWrapper(m, dt, cid, groupChat, showAvatar, isChannel, isNew) {
     // Polls are shared chat cards, not a conventional outgoing bubble.
     // Keep them on the received/left side for everyone, including their
     // creator, so the wide option buttons have room and stay consistent.
-    const isMine = (isChannel || m.poll) ? false : (m.userId === currentUser.uid);
+const isMine = (isChannel) ? false : (m.userId === currentUser.uid);
     const wrapper = document.createElement('div');
     // The whole chat gets fully re-rendered on every snapshot (simplest way
     // to stay in sync), so the appear animation must be opt-in per bubble —
@@ -5438,10 +5444,11 @@ function viewUserProfile(uid, returnScreen) {
         '</div>' +
         '<div class="tg-actions-row">' +
         '<div class="tg-action-btn" id="vpMsgBtn"><div class="circle"><i class="fas fa-comment"></i></div><span>Написать</span></div>' +
-        '</div>' +
+        `<div class="tg-action-btn" onclick="if (!activeChats.has('${uid}')) { activeChats.add('${uid}');loadChatPreview('${uid}', chatIdFor('${uid}'));}openChat('${uid}'); toggleChatSearch();"><div class="circle"><i class="fas fa-search"></i></div><span>Поиск</span></div>` +
+		'</div>' +
         '<div id="vpChannelSection"></div>' +
         '<div class="tg-info-list">' +
-        (user.username ? '<div class="tg-info-row"><div class="tg-info-label">Username</div><div class="tg-info-value">@' + user.username + '</div></div>' : '') +
+        (user.username ? `<div class="tg-info-row"><div class="tg-info-label">Никнейм</div><div class="tg-info-value" onclick="copy('${user.username}');">@${user.username}</div></div>` : '') +
         (user.bio ? '<div class="tg-info-row"><div class="tg-info-label">О себе</div><div class="tg-info-value">' + user.bio + '</div></div>' : '') +
         '</div>' +
         mutualGroupsHtml(uid) +
