@@ -2499,6 +2499,12 @@ mark.chat-search-hit.current {
     word-break: break-word;
     pointer-events: none;
 }
+.msg-input:focus,
+.comments-input:focus,
+.story-caption-input:focus,
+.story-reply-input:focus {
+    scroll-margin: 0;
+}
 
 /* Text-shadow alone isn't enough over busy/bright photos, so this adds a
    soft dark scrim behind the caption — negative z-index keeps it behind
