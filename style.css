@@ -968,13 +968,14 @@ mark.chat-search-hit.current {
     text-decoration: underline;
 }
 
+/* Input */
 .input-container {
-    position: sticky;
-    bottom: 0;
-    z-index: 10;
+    flex-shrink: 0;
+    position: relative;
     background: var(--glass);
     backdrop-filter: blur(26px) saturate(1.4);
     -webkit-backdrop-filter: blur(26px) saturate(1.4);
+    box-shadow: 0 -1px 0 var(--glass-border);
 }
 
 .mention-suggestions {
@@ -1080,12 +1081,36 @@ mark.chat-search-hit.current {
 }
 @font-face {
    font-family: 'Font';
-   src: url("QuarkF2.otf") format('truetype');
+   src: url("slozhna.ttf") format('truetype');
 }
 .msg-input:focus {
     box-shadow: 0 0 0 3px var(--primary-glow);
 }
+.msg-video-container {
+    border-radius: 12px;
+    overflow: hidden;
+    max-width: 400px;
+    background: #000;
+    position: relative;
+}
 
+.msg-video {
+    width: 100%;
+    max-height: 400px;
+    display: block;
+    background: #000;
+    border-radius: 12px;
+}
+
+.msg-file-info {
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
 .send-btn {
     width: calc(38px * var(--ui-scale, 1));
     height: calc(38px * var(--ui-scale, 1));
@@ -2497,12 +2522,6 @@ mark.chat-search-hit.current {
     z-index: 2;
     word-break: break-word;
     pointer-events: none;
-}
-.msg-input:focus,
-.comments-input:focus,
-.story-caption-input:focus,
-.story-reply-input:focus {
-    scroll-margin: 0;
 }
 
 /* Text-shadow alone isn't enough over busy/bright photos, so this adds a
@@ -3941,7 +3960,6 @@ mark.chat-search-hit.current {
     background: var(--glass-border);
 }
 
-/* Comment emoji strip */
 .comment-emoji-strip {
     display: flex;
     gap: calc(3px * var(--ui-scale, 1));
@@ -3955,3 +3973,804 @@ mark.chat-search-hit.current {
 }
 
 .comment-emoji-strip::-webkit-scrollbar { display: none; }
+
+.video-player {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+    max-width: 100%;
+    min-width: 200px;
+    user-select: none;
+}
+.msg-video-container {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+    max-width: 100%;
+    min-width: 200px;
+    user-select: none;
+    aspect-ratio: 16 / 9;
+    width: 100%;
+}
+
+.msg-video-wrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.msg-video-element {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: contain;
+    background: #000;
+    cursor: pointer;
+}
+
+.msg-video-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    transition: background 0.3s ease;
+    pointer-events: none;
+}
+
+.msg-video-overlay:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.msg-video-overlay .msg-video-play-btn {
+    pointer-events: auto;
+}
+
+.msg-video-play-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.95);
+    color: #1a1a2e;
+    font-size: 26px;
+    cursor: pointer;
+    transition: transform 0.2s, background 0.2s, box-shadow 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    pointer-events: auto;
+}
+
+.msg-video-play-btn:hover {
+    transform: scale(1.1);
+    background: #fff;
+    box-shadow: 0 6px 30px rgba(0, 0, 0, 0.4);
+}
+
+.msg-video-play-btn:active {
+    transform: scale(0.95);
+}
+
+.msg-video-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: none;
+    color: white;
+    font-size: 32px;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.msg-video-loading.active {
+    display: block;
+}
+
+.msg-video-controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.85) 60%);
+    padding: 12px 14px 14px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+.msg-video-controls.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.msg-video-container:hover .msg-video-controls {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.msg-video-progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.msg-video-progress-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    transition: height 0.2s ease;
+}
+
+.msg-video-progress-bar:hover {
+    height: 6px;
+}
+
+.msg-video-progress-fill {
+    height: 100%;
+    background: #7C4DFF;
+    border-radius: 2px;
+    width: 0%;
+    position: relative;
+    transition: width 0.05s linear;
+    box-shadow: 0 0 10px rgba(124, 77, 255, 0.3);
+}
+
+.msg-video-progress-buffer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.msg-video-progress-handle {
+    position: absolute;
+    top: 50%;
+    right: -6px;
+    transform: translateY(-50%);
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #7C4DFF;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    box-shadow: 0 0 12px rgba(124, 77, 255, 0.5);
+}
+
+.msg-video-progress-bar:hover .msg-video-progress-handle {
+    opacity: 1;
+    transform: translateY(-50%) scale(1.1);
+}
+
+.msg-video-progress-handle:active {
+    transform: translateY(-50%) scale(1.2);
+}
+
+.msg-video-tooltip {
+    position: absolute;
+    bottom: 100%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    display: none;
+    margin-bottom: 8px;
+    white-space: nowrap;
+    font-weight: 500;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.msg-video-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: rgba(0, 0, 0, 0.85);
+}
+.msg-video-time {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    min-width: 80px;
+    text-align: right;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+.msg-video-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.msg-video-controls-row button {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    padding: 6px 8px;
+    font-size: 15px;
+    border-radius: 6px;
+    transition: background 0.2s, transform 0.15s, color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+}
+
+.msg-video-controls-row button:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    transform: scale(1.05);
+}
+
+.msg-video-controls-row button:active {
+    transform: scale(0.92);
+}
+
+.msg-video-control-play {
+    font-size: 18px;
+    padding: 6px 10px !important;
+}
+.msg-video-volume {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    max-width: 110px;
+}
+
+.msg-video-volume-slider {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    min-width: 30px;
+    transition: height 0.2s ease;
+}
+
+.msg-video-volume-slider:hover {
+    height: 6px;
+}
+
+.msg-video-volume-fill {
+    height: 100%;
+    background: #fff;
+    border-radius: 2px;
+    width: 100%;
+    transition: width 0.05s linear;
+}
+.msg-video-speed {
+    position: relative;
+}
+
+.msg-video-control-speed {
+    font-size: 12px !important;
+    font-weight: 700;
+    min-width: 34px;
+    padding: 4px 6px !important;
+    letter-spacing: 0.3px;
+}
+
+.msg-video-speed-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    background: rgba(20, 20, 30, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 10px;
+    padding: 6px 0;
+    min-width: 72px;
+    display: none;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    margin-bottom: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.msg-video-speed-menu.active {
+    display: block;
+    animation: speedMenuIn 0.15s ease;
+}
+
+@keyframes speedMenuIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.msg-video-speed-menu div {
+    padding: 6px 16px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    text-align: center;
+}
+
+.msg-video-speed-menu div:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+}
+
+.msg-video-speed-menu div.active {
+    color: #7C4DFF;
+    font-weight: 700;
+}
+
+.msg-video-speed-menu div.active::before {
+    content: '✓ ';
+}
+.msg-video-control-fullscreen {
+    font-size: 15px;
+}
+.msg-video-control-download {
+    font-size: 14px;
+}
+.msg-file-info {
+    padding: 6px 14px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(0, 0, 0, 0.4);
+    display: none;
+    align-items: center;
+    gap: 8px;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.msg-file-info i {
+    color: #7C4DFF;
+}
+.msg-video-error {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #fff;
+    font-size: 14px;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.75);
+    padding: 16px 24px;
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.msg-video-error i {
+    display: block;
+    font-size: 32px;
+    margin-bottom: 8px;
+    color: #EF4444;
+}
+.msg-video-container:-webkit-full-screen {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    background: #000;
+    aspect-ratio: auto !important;
+}
+
+.msg-video-container:fullscreen {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    background: #000;
+    aspect-ratio: auto !important;
+}
+
+.msg-video-container:-webkit-full-screen .msg-video-element {
+    object-fit: contain;
+    height: 100vh;
+    width: 100vw;
+}
+
+.msg-video-container:fullscreen .msg-video-element {
+    object-fit: contain;
+    height: 100vh;
+    width: 100vw;
+}
+
+.msg-video-container:-webkit-full-screen .msg-video-controls {
+    padding: 20px 24px 24px;
+}
+
+.msg-video-container:fullscreen .msg-video-controls {
+    padding: 20px 24px 24px;
+}
+.dark-theme .msg-video-play-btn {
+    background: rgba(255, 255, 255, 0.9);
+    color: #1a1a2e;
+}
+
+.dark-theme .msg-video-controls {
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.9) 60%);
+}
+
+.dark-theme .msg-video-progress-fill {
+    background: #8B5CF6;
+}
+
+.dark-theme .msg-video-progress-handle {
+    background: #8B5CF6;
+}
+
+.dark-theme .msg-video-speed-menu {
+    background: rgba(30, 30, 50, 0.95);
+}
+
+.dark-theme .msg-video-speed-menu div.active {
+    color: #8B5CF6;
+}
+:root:not(.dark-theme) .msg-video-controls {
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8) 60%);
+}
+
+:root:not(.dark-theme) .msg-video-speed-menu {
+    background: rgba(255, 255, 255, 0.95);
+}
+
+:root:not(.dark-theme) .msg-video-speed-menu div {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+:root:not(.dark-theme) .msg-video-speed-menu div:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+:root:not(.dark-theme) .msg-video-speed-menu div.active {
+    color: #7C4DFF;
+}
+
+@media (max-width: 480px) {
+    .msg-video-container {
+        border-radius: 8px;
+        min-width: 140px;
+    }
+    
+    .msg-video-play-btn {
+        width: 48px;
+        height: 48px;
+        font-size: 20px;
+    }
+    
+    .msg-video-controls {
+        padding: 8px 10px 10px;
+    }
+    
+    .msg-video-controls-row button {
+        padding: 4px 6px;
+        font-size: 13px;
+        min-width: 28px;
+        height: 28px;
+    }
+    
+    .msg-video-control-play {
+        font-size: 16px;
+    }
+    
+    .msg-video-time {
+        font-size: 10px;
+        min-width: 60px;
+    }
+    
+    .msg-video-volume {
+        max-width: 60px;
+    }
+    
+    .msg-video-control-speed {
+        font-size: 11px !important;
+        min-width: 28px;
+    }
+    
+    .msg-video-speed-menu {
+        min-width: 60px;
+    }
+    
+    .msg-video-speed-menu div {
+        font-size: 12px;
+        padding: 4px 12px;
+    }
+}
+
+@media (max-width: 380px) {
+    .msg-video-controls-row button {
+        padding: 2px 4px;
+        font-size: 12px;
+        min-width: 24px;
+        height: 24px;
+    }
+    
+    .msg-video-volume {
+        max-width: 40px;
+    }
+    
+    .msg-video-time {
+        font-size: 9px;
+        min-width: 50px;
+    }
+}
+.video-wrapper {
+    position: relative;
+    background: #000;
+    width: 100%;
+    aspect-ratio: 16/9;
+}
+
+.video-player-element {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: contain;
+    background: #000;
+}
+
+.video-player-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.3);
+    cursor: pointer;
+    transition: opacity 0.3s;
+    opacity: 1;
+}
+
+.video-player-overlay:hover {
+    background: rgba(0,0,0,0.2);
+}
+
+.video-play-btn {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.9);
+    color: #1a1a2e;
+    font-size: 28px;
+    cursor: pointer;
+    transition: transform 0.2s, background 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.video-play-btn:hover {
+    transform: scale(1.1);
+    background: white;
+}
+
+.video-loading-spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: none;
+    color: white;
+    font-size: 40px;
+}
+.video-controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.85));
+    padding: 10px 16px 12px;
+    opacity: 1;
+    transition: opacity 0.3s;
+    pointer-events: auto;
+}
+
+.video-progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.video-progress-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+}
+
+.video-progress-fill {
+    height: 100%;
+    background: var(--primary, #7C4DFF);
+    border-radius: 2px;
+    width: 0%;
+    position: relative;
+    transition: width 0.1s;
+}
+
+.video-progress-handle {
+    position: absolute;
+    top: 50%;
+    right: -6px;
+    transform: translateY(-50%);
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--primary, #7C4DFF);
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.video-progress-bar:hover .video-progress-handle {
+    opacity: 1;
+}
+
+.video-progress-buffer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    width: 0%;
+}
+
+.video-time {
+    color: white;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    min-width: 80px;
+    text-align: right;
+    opacity: 0.8;
+}
+
+.video-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.video-controls-row button {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 16px;
+    border-radius: 6px;
+    transition: background 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.video-controls-row button:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.video-play-control {
+    font-size: 18px;
+}
+
+.video-volume {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    max-width: 120px;
+}
+
+.video-volume-slider {
+    flex: 1;
+    height: 4px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+}
+
+.video-volume-fill {
+    height: 100%;
+    background: white;
+    border-radius: 2px;
+    width: 100%;
+    transition: width 0.1s;
+}
+
+.video-fullscreen-btn {
+    font-size: 16px;
+}
+
+.video-speed {
+    position: relative;
+}
+
+.video-speed-btn {
+    font-size: 13px !important;
+    font-weight: 600;
+    min-width: 32px;
+}
+
+.video-speed-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    background: rgba(0,0,0,0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 8px;
+    padding: 4px 0;
+    min-width: 80px;
+    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    margin-bottom: 6px;
+}
+
+.video-speed-menu.active {
+    display: block;
+}
+
+.video-speed-menu div {
+    padding: 6px 16px;
+    color: #ddd;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.video-speed-menu div:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.video-speed-menu div.active {
+    color: var(--primary, #7C4DFF);
+    font-weight: 600;
+}
+
+.video-download-btn {
+    font-size: 15px;
+}
